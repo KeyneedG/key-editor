@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
-    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
-    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{5A2F8C98-E468-4AD1-B03A-A072C8C19F1A}</ProjectGuid>
@@ -24,11 +30,11 @@
     <NMakeReBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)build.ps1" -Configuration $(Configuration) -ConfigFile "$(Tiny3DConfigFile)" -Rebuild</NMakeReBuildCommandLine>
     <NMakeCleanCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)build.ps1" -Configuration $(Configuration) -ConfigFile "$(Tiny3DConfigFile)" -Clean</NMakeCleanCommandLine>
     <NMakeOutput>$(OutDir)tiny3d_project.exe</NMakeOutput>
-    <NMakeIncludeSearchPath>$(ProjectDir)..\include;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
+    <NMakeIncludeSearchPath>$(ProjectDir)include;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
     <NMakePreprocessorDefinitions>_WIN32;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
     <AdditionalOptions>/std:c++17 $(AdditionalOptions)</AdditionalOptions>
     <LocalDebuggerCommand>$(OutDir)tiny3d_project.exe</LocalDebuggerCommand>
-    <LocalDebuggerWorkingDirectory>$(ProjectDir)..</LocalDebuggerWorkingDirectory>
+    <LocalDebuggerWorkingDirectory>$(ProjectDir)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
   <ItemDefinitionGroup>
@@ -37,18 +43,19 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="..\include\tiny3d\engine.hpp" />
-    <ClInclude Include="..\include\tiny3d\math.hpp" />
-    <ClInclude Include="..\include\tiny3d\project.hpp" />
-    <ClCompile Include="..\src\renderer.cpp" />
-    <ClCompile Include="..\src\platform.cpp" />
-    <None Include="..\src\project_main.cpp" />
+    <ClInclude Include="include\tiny3d\engine.hpp" />
+    <ClInclude Include="include\tiny3d\math.hpp" />
+    <ClInclude Include="include\tiny3d\project.hpp" />
+    <ClCompile Include="..\DEMO\game.cpp" Condition="Exists('$(ProjectDir)..\DEMO\game.cpp')" />
+    <ClCompile Include="src\renderer.cpp" />
+    <ClCompile Include="src\platform.cpp" />
+    <None Include="src\project_main.cpp" />
     <None Include="engine.json" />
     <None Include="build.ps1" />
     <None Include="launch.ps1" />
     <None Include="project.cmake" />
-    <None Include="..\CMakeLists.txt" />
-    <None Include="..\README.md" />
+    <None Include="CMakeLists.txt" />
+    <None Include="README.md" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

@@ -9,7 +9,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 try {
-    $engineDirectory = Split-Path -Parent $PSScriptRoot
+    $engineDirectory = $PSScriptRoot
     $buildDirectory = Join-Path $PSScriptRoot "build\$Configuration"
     $configPath = (Resolve-Path -LiteralPath $ConfigFile).Path
 
@@ -53,7 +53,7 @@ try {
     $autoStart = if ($NoLaunch) { 'OFF' } else { 'ON' }
     & $cmake -S $engineDirectory -B $buildDirectory -G Ninja `
         "-DCMAKE_MAKE_PROGRAM=$ninja" "-DCMAKE_BUILD_TYPE=$Configuration" `
-        "-DTINY3D_CONFIG=$configPath" "-DTINY3D_AUTO_START=$autoStart" -DBUILD_TESTING=OFF
+        "-DTINY3D_CONFIG=$configPath" "-DTINY3D_AUTO_START=$autoStart"
     if ($LASTEXITCODE -ne 0) { throw 'Configuration failed. Check the JSON settings and project manifest.' }
     $buildArguments = @('--build', $buildDirectory, '--parallel')
     if ($Rebuild) { $buildArguments += '--clean-first' }

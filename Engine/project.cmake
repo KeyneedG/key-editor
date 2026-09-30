@@ -68,7 +68,7 @@ if(WIN32 AND NOT TINY3D_HEADLESS AND TINY3D_AUTO_START AND project_auto_start)
     find_program(TINY3D_POWERSHELL NAMES powershell REQUIRED)
     add_custom_target(tiny3d_launch ALL
         COMMAND "${TINY3D_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
-            -File "${CMAKE_CURRENT_SOURCE_DIR}/Editor/launch.ps1"
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/launch.ps1"
             -Executable "$<TARGET_FILE:tiny3d_project>" -WorkingDirectory "${project_directory}"
         DEPENDS tiny3d_project
         VERBATIM)

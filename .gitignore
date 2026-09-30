@@ -1,6 +1,5 @@
-/build*/
-/Editor/build/
+/Engine/build/
 /DEMO/build/
-/out/
 **/.vs/
+*.vcxproj.user
 *.ppm
