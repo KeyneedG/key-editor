@@ -1,8 +1,6 @@
-#include "tiny3d/engine.hpp"
+#include "tiny3d/project.hpp"
 
 #include <algorithm>
-#include <iostream>
-#include <stdexcept>
 
 using namespace tiny3d;
 
@@ -89,33 +87,6 @@ private:
     float time_ = 0;
 };
 
-int main(int argc, char** argv) {
-    try {
-        Collector game;
-        if (argc == 3 && std::string(argv[1]) == "--render") {
-            game.update(.5f, {});
-            Renderer renderer(800, 500);
-            renderer.render(game.scene(), game.camera());
-            renderer.savePPM(argv[2]);
-            std::cout << "Saved " << argv[2] << '\n';
-            return 0;
-        }
-        unsigned frames = 0;
-        if (argc == 3 && std::string(argv[1]) == "--frames") {
-            const std::string count = argv[2];
-            if (count.empty() || count.find_first_not_of("0123456789") != std::string::npos) {
-                throw std::invalid_argument("Frame count must be a positive integer");
-            }
-            const auto value = std::stoul(count);
-            if (value == 0 || value > 1000000) throw std::invalid_argument("Frame count must be between 1 and 1000000");
-            frames = static_cast<unsigned>(value);
-        } else if (argc != 1) {
-            std::cerr << "Usage: demo [--render file.ppm | --frames count]\n";
-            return 1;
-        }
-        return run(game, 800, 500, frames);
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
-        return 1;
-    }
+std::unique_ptr<Game> tiny3d::createGame() {
+    return std::make_unique<Collector>();
 }

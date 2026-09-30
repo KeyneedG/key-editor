@@ -137,7 +137,7 @@ int run(Game& game, int width, int height, unsigned frameLimit) {
 #else
 namespace tiny3d {
 int run(Game&, int, int, unsigned) {
-    std::cerr << "The window backend is unavailable in this build. Use demo --render frame.ppm, "
+    std::cerr << "The window backend is unavailable in this build. Use tiny3d_project --render frame.ppm, "
                  "or add a platform backend in src/platform.cpp.\n";
     return 1;
 }

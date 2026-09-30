@@ -1,2 +1,6 @@
 /build*/
+/Editor/build/
+/DEMO/build/
+/out/
+**/.vs/
 *.ppm
