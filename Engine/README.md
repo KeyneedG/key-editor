@@ -103,6 +103,8 @@ Include `tiny3d/project.hpp`, derive a class from `tiny3d::Game`, and implement:
 - `update(float seconds, const Input&)` for game logic.
 - `scene() const` returning your `Scene` by const reference.
 - Optionally `title() const` for the window title.
+- Optionally `captureMouse() const` to hide and confine the cursor while focused.
+- Optionally `shouldQuit() const` to end the game loop.
 
 Implement `std::unique_ptr<tiny3d::Game> tiny3d::createGame()` to construct your
 game. The engine supplies `main()` through `src/project_main.cpp`.
@@ -136,7 +138,52 @@ with `std::move` rather than copying. Mesh data can be shared by multiple
 `MeshRenderer` components. Entity transforms scale, rotate, then translate.
 The engine updates the game and calls `Renderer::render(scene)` every frame.
 Update your custom component behavior from `Game::update`. Input exposes
-`held(Key)` and `pressed(Key)`.
+`held`, `pressed`, and `released` for both keyboard keys and mouse buttons.
+
+## Keyboard and mouse input
+
+Use key names such as `Key::W`, `Key::A`, `Key::LeftArrow`, `Key::Space`, and
+`Key::Escape`. The enum includes A-Z, `Digit0`-`Digit9`, navigation and punctuation
+keys, F1-F24, numpad keys, lock keys, left/right modifiers, Windows/menu keys,
+browser/media/volume keys, and IME keys. `Key::NumpadEnter` is distinct from
+`Key::Enter`; `Key::Shift`, `Key::Control`, and `Key::Alt` mean either side.
+Key names follow [Windows virtual-key mappings](https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes).
+Punctuation depends on the keyboard layout; these are key states rather than text.
+System shortcuts still follow Windows behavior.
+
+```cpp
+if (input.held(Key::W)) { /* move forward */ }
+if (input.pressed(Key::R)) { /* reset */ }
+if (input.released(Key::Space)) { /* space was released */ }
+if (input.pressed(MouseButton::Left)) { /* fire */ }
+if (input.held(MouseButton::Right)) { /* aim */ }
+```
+
+Mouse buttons are `Left`, `Right`, `Middle`, `Back`, and `Forward`.
+`mouseX`/`mouseY` are client-area pixels, with the origin at the top-left;
+they use the window's size, including any letterboxing. `mouseDeltaX` and
+`mouseDeltaY` accumulate movement for the current frame: positive means right
+and down. The Windows backend uses [raw mouse input](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-rawmouse)
+so captured movement continues at screen edges. Multiply movement by sensitivity,
+without multiplying by elapsed seconds:
+
+```cpp
+camera.transform.rotation.y += input.mouseDeltaX * .0025f;
+camera.transform.rotation.x += input.mouseDeltaY * .0025f;
+```
+
+`mouseWheel` is vertical scrolling (positive is up/away); `mouseWheelHorizontal`
+is horizontal scrolling (positive is right). One wheel step is 1; fractional steps
+are retained. Movement and scrolling reset every frame. A press and release
+between frames still produce both edges, so short taps/clicks are not discarded.
+`input.focused` reports window focus; losing focus releases held inputs and
+discards pending movement and scrolling.
+
+Return `true` from `Game::captureMouse()` for mouse look. The engine hides and
+confines the cursor only while your window is focused, and restores it on focus
+loss or exit. Its default is `false` for games that need a free cursor. To quit
+on Escape, handle `input.pressed(Key::Escape)` in your game and return `true` from
+`shouldQuit()`; the engine also handles the window's close button and Alt+F4.
 
 For custom meshes, fill `vertices` and `triangles` with zero-based vertex indices.
 Faces wind counterclockwise when seen from outside. Coordinates use +Y up and +Z

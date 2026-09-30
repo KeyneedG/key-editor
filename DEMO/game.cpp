@@ -11,17 +11,19 @@ public:
     float fps = 0;
 
     void update(float seconds, const Input& input) override {
-        fps = 1 / seconds;
+        fps = seconds > 0 ? 1 / seconds : 0;
 
-        if (input.pressed(Key::Reset)) reset();
+        if (input.pressed(Key::Escape)) { quit_ = true; return; }
+        if (input.pressed(Key::R)) reset();
         const auto axis = [&](Key positive, Key negative) {
             return float(input.held(positive)) - float(input.held(negative));
         };
         Transform& camera = scene_.entities.front().transform;
-        camera.rotation.y += axis(Key::LookRight, Key::LookLeft) * seconds * 1.6f;
+        constexpr float mouseSensitivity = .0025f;
+        camera.rotation.y += input.mouseDeltaX * mouseSensitivity;
         camera.rotation.x = std::clamp(camera.rotation.x +
-            axis(Key::LookDown, Key::LookUp) * seconds * 1.6f, -1.2f, 1.2f);
-        const Vec3 movement{axis(Key::Right, Key::Left), 0, axis(Key::Forward, Key::Backward)};
+            input.mouseDeltaY * mouseSensitivity, -1.2f, 1.2f);
+        const Vec3 movement{axis(Key::D, Key::A), 0, axis(Key::W, Key::S)};
         camera.position = camera.position + rotateY(normalized(movement), camera.rotation.y) * (seconds * 4);
         camera.position.x = std::clamp(camera.position.x, -10.0f, 10.0f);
         camera.position.z = std::clamp(camera.position.z, -6.0f, 16.0f);
@@ -40,10 +42,12 @@ public:
     }
 
     const Scene& scene() const override { return scene_; }
+    bool captureMouse() const override { return true; }
+    bool shouldQuit() const override { return quit_; }
     std::string title() const override {
         const std::string progress = collected_ == collectibles_.size() ?
             "All cubes collected!" : "Gold cubes: " + std::to_string(collected_) + "/" + std::to_string(collectibles_.size());
-        return "FPS " + std::to_string(fps) + " | " + progress + " | WASD move | Arrows look | R reset | Esc quit";
+        return "FPS " + std::to_string(fps) + " | " + progress + " | WASD move | Mouse look | R reset | Esc quit";
     }
 
 private:
@@ -91,6 +95,7 @@ private:
     std::vector<std::size_t> collectibles_;
     std::size_t collected_ = 0;
     float time_ = 0;
+    bool quit_ = false;
 };
 
 std::unique_ptr<Game> tiny3d::createGame() {
