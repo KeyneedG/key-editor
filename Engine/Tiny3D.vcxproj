@@ -49,7 +49,7 @@
     <ClCompile Include="..\DEMO\game.cpp" Condition="Exists('$(ProjectDir)..\DEMO\game.cpp')" />
     <ClCompile Include="src\renderer.cpp" />
     <ClCompile Include="src\platform.cpp" />
-    <None Include="src\project_main.cpp" />
+    <ClCompile Include="src\project_main.cpp" />
     <None Include="engine.json" />
     <None Include="build.ps1" />
     <None Include="launch.ps1" />

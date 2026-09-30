@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace tiny3d {
@@ -27,29 +28,65 @@ struct Mesh {
 Mesh cube();   // Unit cube, centered at the origin.
 Mesh plane();  // Unit square on XZ, facing +Y.
 
-struct Entity {
+struct Component {
+    bool enabled = true;
+    virtual ~Component() = 0;
+};
+inline Component::~Component() = default;
+
+struct MeshRenderer : Component {
     std::shared_ptr<const Mesh> mesh;
-    Transform transform{};
     Color color{};
+
+    explicit MeshRenderer(std::shared_ptr<const Mesh> mesh = {}, Color color = {})
+        : mesh(std::move(mesh)), color(color) {}
+};
+
+struct Camera : Component {
+    float depth = 0; // The highest enabled camera depth supplies the view.
+    float fieldOfView = pi / 3; // Vertical field of view in radians.
+    float nearPlane = 0.1f;
+    float farPlane = 100;
+};
+
+struct Entity {
+    Transform transform{};
     bool visible = true;
+    std::vector<std::unique_ptr<Component>> components;
+
+    template<class T, class... Args>
+    T& addComponent(Args&&... args) {
+        auto component = std::make_unique<T>(std::forward<Args>(args)...);
+        T& result = *component;
+        components.push_back(std::move(component));
+        return result;
+    }
+
+    template<class T>
+    T* getComponent() {
+        for (auto& component : components) {
+            if (auto* found = dynamic_cast<T*>(component.get())) return found;
+        }
+        return nullptr;
+    }
+
+    template<class T>
+    const T* getComponent() const {
+        for (const auto& component : components) {
+            if (auto* found = dynamic_cast<const T*>(component.get())) return found;
+        }
+        return nullptr;
+    }
 };
 
 struct Scene {
     std::vector<Entity> entities;
 };
 
-struct Camera {
-    Vec3 position{};
-    Vec3 rotation{};
-    float fieldOfView = pi / 3; // Vertical field of view in radians.
-    float nearPlane = 0.1f;
-    float farPlane = 100;
-};
-
 class Renderer {
 public:
     Renderer(int width, int height);
-    void render(const Scene& scene, const Camera& camera, Color background = {28, 36, 52});
+    void render(const Scene& scene, Color background = {28, 36, 52});
     void savePPM(const std::string& path) const;
 
     int width() const { return width_; }
@@ -82,7 +119,6 @@ public:
     virtual ~Game() = default;
     virtual void update(float seconds, const Input& input) = 0;
     virtual const Scene& scene() const = 0;
-    virtual const Camera& camera() const = 0;
     virtual std::string title() const { return "Tiny3D"; }
 };
 

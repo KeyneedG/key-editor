@@ -61,13 +61,29 @@ Color shade(Color color, float brightness) {
 }
 } // namespace
 
-void Renderer::render(const Scene& scene, const Camera& camera, Color background) {
+void Renderer::render(const Scene& scene, Color background) {
+    std::fill(pixels_.begin(), pixels_.end(), background.packed());
+    std::fill(depth_.begin(), depth_.end(), 0.0f);
+
+    const Camera* activeCamera = nullptr;
+    const Transform* cameraTransform = nullptr;
+    for (const Entity& entity : scene.entities) {
+        if (!entity.visible) continue;
+        for (const auto& component : entity.components) {
+            const auto* camera = dynamic_cast<const Camera*>(component.get());
+            if (camera && camera->enabled && (!activeCamera || camera->depth > activeCamera->depth)) {
+                activeCamera = camera;
+                cameraTransform = &entity.transform;
+            }
+        }
+    }
+    if (!activeCamera) return;
+    const Camera& camera = *activeCamera;
+    const Transform& view = *cameraTransform;
     if (!(camera.nearPlane > 0 && camera.farPlane > camera.nearPlane &&
           camera.fieldOfView > 0 && camera.fieldOfView < pi)) {
         throw std::invalid_argument("Invalid camera projection");
     }
-    std::fill(pixels_.begin(), pixels_.end(), background.packed());
-    std::fill(depth_.begin(), depth_.end(), 0.0f);
     const float halfY = std::tan(camera.fieldOfView * .5f);
     const float halfX = halfY * static_cast<float>(width_) / static_cast<float>(height_);
     const std::array<ClipPlane, 6> planes{{
@@ -82,25 +98,29 @@ void Renderer::render(const Scene& scene, const Camera& camera, Color background
     };
 
     for (const Entity& entity : scene.entities) {
-        if (!entity.visible || !entity.mesh) continue;
-        const Mesh& mesh = *entity.mesh;
-        std::vector<Vec3> world;
-        world.reserve(mesh.vertices.size());
-        for (Vec3 v : mesh.vertices) world.push_back(entity.transform.point(v));
-        for (const auto& indices : mesh.triangles) {
-            for (auto index : indices) {
-                if (index >= world.size()) throw std::invalid_argument("Mesh index out of bounds");
-            }
-            const Vec3 a = world[indices[0]], b = world[indices[1]], c = world[indices[2]];
-            const Vec3 normal = cross(b - a, c - a);
-            if (dot(normal, a - camera.position) >= 0) continue; // Back face or degenerate.
-            const float brightness = .25f + .75f * std::max(0.0f, dot(normalized(normal), light));
-            const auto color = shade(entity.color, std::min(brightness, 1.0f)).packed();
-            std::vector<Vec3> polygon;
-            for (Vec3 v : {a, b, c}) polygon.push_back(inverseRotate(v - camera.position, camera.rotation));
-            for (const auto& plane : planes) polygon = clip(polygon, plane);
-            for (std::size_t i = 1; i + 1 < polygon.size(); ++i) {
-                triangle(project(polygon[0]), project(polygon[i]), project(polygon[i + 1]), color);
+        if (!entity.visible) continue;
+        for (const auto& component : entity.components) {
+            const auto* visual = dynamic_cast<const MeshRenderer*>(component.get());
+            if (!visual || !visual->enabled || !visual->mesh) continue;
+            const Mesh& mesh = *visual->mesh;
+            std::vector<Vec3> world;
+            world.reserve(mesh.vertices.size());
+            for (Vec3 v : mesh.vertices) world.push_back(entity.transform.point(v));
+            for (const auto& indices : mesh.triangles) {
+                for (auto index : indices) {
+                    if (index >= world.size()) throw std::invalid_argument("Mesh index out of bounds");
+                }
+                const Vec3 a = world[indices[0]], b = world[indices[1]], c = world[indices[2]];
+                const Vec3 normal = cross(b - a, c - a);
+                if (dot(normal, a - view.position) >= 0) continue; // Back face or degenerate.
+                const float brightness = .25f + .75f * std::max(0.0f, dot(normalized(normal), light));
+                const auto color = shade(visual->color, std::min(brightness, 1.0f)).packed();
+                std::vector<Vec3> polygon;
+                for (Vec3 v : {a, b, c}) polygon.push_back(inverseRotate(v - view.position, view.rotation));
+                for (const auto& plane : planes) polygon = clip(polygon, plane);
+                for (std::size_t i = 1; i + 1 < polygon.size(); ++i) {
+                    triangle(project(polygon[0]), project(polygon[i]), project(polygon[i + 1]), color);
+                }
             }
         }
     }

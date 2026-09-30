@@ -102,16 +102,41 @@ Include `tiny3d/project.hpp`, derive a class from `tiny3d::Game`, and implement:
 
 - `update(float seconds, const Input&)` for game logic.
 - `scene() const` returning your `Scene` by const reference.
-- `camera() const` returning your `Camera` by const reference.
 - Optionally `title() const` for the window title.
 
 Implement `std::unique_ptr<tiny3d::Game> tiny3d::createGame()` to construct your
 game. The engine supplies `main()` through `src/project_main.cpp`.
 
-Own the scene and camera in your game class. Add `Entity` values to
-`scene.entities`; entities can share a `Mesh`. Transforms scale, rotate, then
-translate. The engine updates the game and renders its scene every frame.
-Input exposes `held(Key)` and `pressed(Key)`.
+Own the scene in your game class. Each `Entity` has a transform, visibility flag,
+and an owned list of components. `Component` is abstract with a virtual destructor;
+derive from it to add your own component types. Use `addComponent<T>(...)` to
+construct a component and `getComponent<T>()` to find the first matching component
+(or `nullptr`). Components have an `enabled` flag.
+
+`MeshRenderer` combines a shared mesh and its color in one component. `Camera`
+is a component too; its position and rotation come from its entity's transform.
+The renderer chooses the enabled camera with the highest `depth` on a visible
+entity every frame. Negative depths work; ties use the first camera in scene and
+component order. Without an eligible camera, the frame contains only the background.
+Camera scale does not affect the view.
+
+```cpp
+Entity camera;
+camera.transform.position = {0, 1, -5};
+camera.addComponent<Camera>().depth = 10;
+scene.entities.push_back(std::move(camera));
+
+Entity object;
+object.addComponent<MeshRenderer>(std::make_shared<Mesh>(cube()), Color{255, 195, 60});
+scene.entities.push_back(std::move(object));
+```
+
+Entities own their components through `unique_ptr`; move them into the scene
+with `std::move` rather than copying. Mesh data can be shared by multiple
+`MeshRenderer` components. Entity transforms scale, rotate, then translate.
+The engine updates the game and calls `Renderer::render(scene)` every frame.
+Update your custom component behavior from `Game::update`. Input exposes
+`held(Key)` and `pressed(Key)`.
 
 For custom meshes, fill `vertices` and `triangles` with zero-based vertex indices.
 Faces wind counterclockwise when seen from outside. Coordinates use +Y up and +Z

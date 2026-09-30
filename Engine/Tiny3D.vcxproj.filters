@@ -1,0 +1,59 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="..\DEMO\game.cpp">
+      <Filter>Demo</Filter>
+    </ClCompile>
+    <ClCompile Include="src\platform.cpp">
+      <Filter>Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\renderer.cpp">
+      <Filter>Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="src\project_main.cpp">
+      <Filter>Engine</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\tiny3d\engine.hpp">
+      <Filter>Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="include\tiny3d\math.hpp">
+      <Filter>Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="include\tiny3d\project.hpp">
+      <Filter>Engine</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="build.ps1">
+      <Filter>Misc</Filter>
+    </None>
+    <None Include="CMakeLists.txt">
+      <Filter>Misc</Filter>
+    </None>
+    <None Include="engine.json">
+      <Filter>Engine</Filter>
+    </None>
+    <None Include="launch.ps1">
+      <Filter>Misc</Filter>
+    </None>
+    <None Include="project.cmake">
+      <Filter>Misc</Filter>
+    </None>
+    <None Include="README.md">
+      <Filter>Misc</Filter>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Misc">
+      <UniqueIdentifier>{661a377e-84fd-42e6-89bd-075515b63dd9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Demo">
+      <UniqueIdentifier>{2d049724-4f8d-4518-acd6-eb61779b81dd}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Engine">
+      <UniqueIdentifier>{afcee2d3-816c-476f-8857-ae06de78d045}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

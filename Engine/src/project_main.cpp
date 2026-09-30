@@ -4,6 +4,16 @@
 #include <iostream>
 #include <stdexcept>
 
+// CMake supplies the real values; these defaults are only for Visual Studio's parser.
+#ifdef __INTELLISENSE__
+#ifndef TINY3D_PROJECT_DIRECTORY
+#define TINY3D_PROJECT_DIRECTORY "."
+#endif
+#ifndef TINY3D_PROJECT_MODE
+#define TINY3D_PROJECT_MODE "editor"
+#endif
+#endif
+
 int main(int argc, char** argv) {
     try {
         // Resolve output paths before switching to the project's asset directory.
@@ -30,7 +40,7 @@ int main(int argc, char** argv) {
         if (!output.empty()) {
             game->update(0, {});
             tiny3d::Renderer renderer(800, 500);
-            renderer.render(game->scene(), game->camera());
+            renderer.render(game->scene());
             renderer.savePPM(output.string());
             std::cout << "Saved " << output.string() << '\n';
             return 0;

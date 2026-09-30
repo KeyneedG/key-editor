@@ -119,7 +119,7 @@ int run(Game& game, int width, int height, unsigned frameLimit) {
         const float elapsed = std::chrono::duration<float>(frameStart - previousTime).count();
         previousTime = frameStart;
         game.update(std::min(elapsed, .05f), input); // Avoid jumps after pauses or window dragging.
-        renderer.render(game.scene(), game.camera());
+        renderer.render(game.scene());
         const std::string title = game.title();
         if (title != previousTitle) {
             SetWindowTextA(window.value, title.c_str());
