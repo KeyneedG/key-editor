@@ -51,10 +51,14 @@ project builds only `tiny3d.lib`.
 Each build reads the settings and source manifest again. Change `project` or `mode`
 and rebuild to switch. No game `.sln`, `.vcxproj`, or CMake files are required.
 
-Edit the engine through the solution's `include` and `src` files. Open game source
+Edit the engine through the solution's `include` and `src` files. The included demo's
+`game.cpp` appears in the editor project while its folder exists. Open your own game source
 files through **File > Open > File**, or add them to the editor project with
 **Add > Existing Item** for convenient editing. The JSON manifest controls which
 game files actually compile.
+
+The editor project sets C++17 for IntelliSense as well as the build. Reload the
+project when Visual Studio detects an external change to its `.vcxproj` settings.
 
 For debugging, set `autoStart` to `false`, select **Debug | x64**, and press **F5**.
 Visual Studio builds and launches `tiny3d_project.exe` under its C++ debugger. Keeping

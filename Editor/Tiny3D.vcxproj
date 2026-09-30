@@ -26,11 +26,16 @@
     <NMakeOutput>$(OutDir)tiny3d_project.exe</NMakeOutput>
     <NMakeIncludeSearchPath>$(ProjectDir)..\include;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
     <NMakePreprocessorDefinitions>_WIN32;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
-    <NMakeAdditionalOptions>/std:c++17</NMakeAdditionalOptions>
+    <AdditionalOptions>/std:c++17 $(AdditionalOptions)</AdditionalOptions>
     <LocalDebuggerCommand>$(OutDir)tiny3d_project.exe</LocalDebuggerCommand>
     <LocalDebuggerWorkingDirectory>$(ProjectDir)..</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="..\include\tiny3d\engine.hpp" />
     <ClInclude Include="..\include\tiny3d\math.hpp" />
