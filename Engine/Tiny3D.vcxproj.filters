@@ -7,6 +7,9 @@
     <ClCompile Include="src\platform.cpp">
       <Filter>Engine</Filter>
     </ClCompile>
+    <ClCompile Include="src\physics.cpp">
+      <Filter>Engine</Filter>
+    </ClCompile>
     <ClCompile Include="src\renderer.cpp">
       <Filter>Engine</Filter>
     </ClCompile>
@@ -19,6 +22,9 @@
       <Filter>Engine</Filter>
     </ClInclude>
     <ClInclude Include="include\tiny3d\math.hpp">
+      <Filter>Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="include\tiny3d\physics.hpp">
       <Filter>Engine</Filter>
     </ClInclude>
     <ClInclude Include="include\tiny3d\project.hpp">

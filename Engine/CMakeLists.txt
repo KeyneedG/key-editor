@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.19)
 project(tiny3d LANGUAGES CXX)
 
 option(TINY3D_HEADLESS "Build without the native window backend" OFF)
-add_library(tiny3d STATIC src/renderer.cpp src/platform.cpp)
+add_library(tiny3d STATIC src/renderer.cpp src/platform.cpp src/physics.cpp)
 target_include_directories(tiny3d PUBLIC include)
 target_compile_features(tiny3d PUBLIC cxx_std_17)
 set_target_properties(tiny3d PROPERTIES CXX_EXTENSIONS OFF)

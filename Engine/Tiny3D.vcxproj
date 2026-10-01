@@ -45,10 +45,12 @@
   <ItemGroup>
     <ClInclude Include="include\tiny3d\engine.hpp" />
     <ClInclude Include="include\tiny3d\math.hpp" />
+    <ClInclude Include="include\tiny3d\physics.hpp" />
     <ClInclude Include="include\tiny3d\project.hpp" />
     <ClCompile Include="..\DEMO\game.cpp" Condition="Exists('$(ProjectDir)..\DEMO\game.cpp')" />
     <ClCompile Include="src\renderer.cpp" />
     <ClCompile Include="src\platform.cpp" />
+    <ClCompile Include="src\physics.cpp" />
     <ClCompile Include="src\project_main.cpp" />
     <None Include="engine.json" />
     <None Include="build.ps1" />

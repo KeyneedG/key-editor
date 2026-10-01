@@ -6,8 +6,8 @@ Win32/GDI. CMake reads JSON without a separate JSON library.
 
 ```text
 Engine/
-  include/tiny3d/    Public math, engine, and project API
-  src/              Renderer, window/input loop, and project entry point
+  include/tiny3d/    Public math, engine, physics, and project API
+  src/              Renderer, physics, window/input loop, and project entry point
   Tiny3D.sln        Visual Studio editor solution
   Tiny3D.vcxproj    Editor project, including C++17 IntelliSense settings
   engine.json       Selected project, mode, and automatic startup
@@ -184,6 +184,50 @@ confines the cursor only while your window is focused, and restores it on focus
 loss or exit. Its default is `false` for games that need a free cursor. To quit
 on Escape, handle `input.pressed(Key::Escape)` in your game and return `true` from
 `shouldQuit()`; the engine also handles the window's close button and Alt+F4.
+
+## Simple physics
+
+Include `tiny3d/physics.hpp`. Components and simulation are in `physics.hpp` and
+`src/physics.cpp`, independently of rendering and input.
+
+- `BoxCollider`: local `center` and full local `size` (default 1 in each axis).
+- `SphereCollider`: local `center` and `radius` (default .5).
+- `Rigidbody`: `velocity`, positive `mass`, `useGravity`, and `isKinematic`.
+
+Use one enabled collider and one rigidbody per entity. A collider without an
+enabled rigidbody is static. Dynamic bodies integrate velocity and gravity;
+collisions separate overlapping bodies and stop their relative inward velocity.
+Mass controls how much each dynamic body moves during a collision. Kinematic
+bodies are unaffected by gravity and impulses; scripts control their movement.
+Rendering visibility does not disable physics. Disable the collider component
+to turn off its collisions.
+
+Own a `Physics` instance in your game and call `physics.step(scene, seconds)`
+from `Game::update`, after scripted movement. It uses small substeps internally.
+Its configurable `gravity` defaults to `{0, -9.81f, 0}`. A body without a collider
+still moves, but has no collision response.
+
+```cpp
+Entity camera;
+camera.addComponent<Camera>();
+camera.addComponent<SphereCollider>().radius = .35f;
+camera.addComponent<Rigidbody>().isKinematic = true;
+camera.transform.position = {0, 1.5f, -5};
+scene.entities.push_back(std::move(camera));
+
+// In update: use this for a kinematic camera's movement, then step dynamic bodies.
+physics.move(scene, scene.entities[0], movement * seconds);
+physics.step(scene, seconds);
+```
+
+`Physics::move` breaks displacement into small pieces and corrects overlap so
+the moved entity stops and slides against colliders. It does not push other
+entities; direct transform writes are teleports and bypass this movement path.
+Collider centers and dimensions follow entity transforms. Sphere radius uses
+the largest absolute scale axis. Boxes use world axis-aligned bounds, including
+the enclosure of rotated boxes. This is deliberately linear physics: no angular
+motion, friction, bouncing, triggers, or continuous collision detection. Keep
+time steps and movement small; substeps are capped at 128 per call.
 
 For custom meshes, fill `vertices` and `triangles` with zero-based vertex indices.
 Faces wind counterclockwise when seen from outside. Coordinates use +Y up and +Z

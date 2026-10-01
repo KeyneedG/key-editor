@@ -1,4 +1,5 @@
 #include "tiny3d/project.hpp"
+#include "tiny3d/physics.hpp"
 
 #include <algorithm>
 
@@ -24,9 +25,11 @@ public:
         camera.rotation.x = std::clamp(camera.rotation.x +
             input.mouseDeltaY * mouseSensitivity, -1.2f, 1.2f);
         const Vec3 movement{axis(Key::D, Key::A), 0, axis(Key::W, Key::S)};
-        camera.position = camera.position + rotateY(normalized(movement), camera.rotation.y) * (seconds * 4);
-        camera.position.x = std::clamp(camera.position.x, -10.0f, 10.0f);
-        camera.position.z = std::clamp(camera.position.z, -6.0f, 16.0f);
+        Vec3 target = camera.position + rotateY(normalized(movement), camera.rotation.y) * (seconds * 4);
+        target.x = std::clamp(target.x, -10.0f, 10.0f);
+        target.z = std::clamp(target.z, -6.0f, 16.0f);
+        physics_.move(scene_, scene_.entities.front(), target - camera.position);
+        physics_.step(scene_, seconds);
         time_ += seconds;
         for (auto index : collectibles_) {
             Entity& item = scene_.entities[index];
@@ -56,6 +59,8 @@ private:
         collectibles_.clear();
         Entity camera;
         camera.addComponent<Camera>();
+        camera.addComponent<SphereCollider>().radius = .35f;
+        camera.addComponent<Rigidbody>().isKinematic = true;
         camera.transform.position = {0, 1.5f, -5};
         camera.transform.rotation.x = .12f;
         scene_.entities.push_back(std::move(camera));
@@ -63,6 +68,10 @@ private:
         time_ = 0;
         const auto floor = std::make_shared<Mesh>(plane());
         const auto box = std::make_shared<Mesh>(cube());
+        Entity ground;
+        ground.transform.position = {0, -.1f, 6};
+        ground.addComponent<BoxCollider>().size = {24, .2f, 24};
+        scene_.entities.push_back(std::move(ground));
         for (int z = -3; z < 9; ++z) {
             for (int x = -6; x < 6; ++x) {
                 Entity tile;
@@ -78,6 +87,7 @@ private:
             block.transform.position = position;
             block.transform.scale = {1.5f, position.y * 2, 1.5f};
             block.addComponent<MeshRenderer>(box, Color{72, 153, 205});
+            block.addComponent<BoxCollider>();
             scene_.entities.push_back(std::move(block));
         }
         for (Vec3 position : {Vec3{-3, .7f, 0}, Vec3{3, .7f, 2}, Vec3{-2, .7f, 6},
@@ -92,6 +102,7 @@ private:
     }
 
     Scene scene_;
+    Physics physics_;
     std::vector<std::size_t> collectibles_;
     std::size_t collected_ = 0;
     float time_ = 0;
