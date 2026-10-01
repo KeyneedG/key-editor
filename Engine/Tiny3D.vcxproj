@@ -30,7 +30,7 @@
     <NMakeReBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)build.ps1" -Configuration $(Configuration) -ConfigFile "$(Tiny3DConfigFile)" -Rebuild</NMakeReBuildCommandLine>
     <NMakeCleanCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)build.ps1" -Configuration $(Configuration) -ConfigFile "$(Tiny3DConfigFile)" -Clean</NMakeCleanCommandLine>
     <NMakeOutput>$(OutDir)tiny3d_project.exe</NMakeOutput>
-    <NMakeIncludeSearchPath>$(ProjectDir)include;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
+    <NMakeIncludeSearchPath>$(ProjectDir)include;$(ProjectDir)EryScript\include;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
     <NMakePreprocessorDefinitions>_WIN32;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
     <AdditionalOptions>/std:c++17 $(AdditionalOptions)</AdditionalOptions>
     <LocalDebuggerCommand>$(OutDir)tiny3d_project.exe</LocalDebuggerCommand>
@@ -48,11 +48,15 @@
     <ClInclude Include="include\tiny3d\physics.hpp" />
     <ClInclude Include="include\tiny3d\project.hpp" />
     <ClInclude Include="include\tiny3d\ui.hpp" />
+    <ClInclude Include="include\tiny3d\eryscript.hpp" />
+    <ClInclude Include="EryScript\include\eryscript\eryscript.hpp" />
     <ClCompile Include="..\DEMO\game.cpp" Condition="Exists('$(ProjectDir)..\DEMO\game.cpp')" />
     <ClCompile Include="src\renderer.cpp" />
     <ClCompile Include="src\platform.cpp" />
     <ClCompile Include="src\physics.cpp" />
     <ClCompile Include="src\ui.cpp" />
+    <ClCompile Include="src\eryscript.cpp" />
+    <ClCompile Include="EryScript\src\eryscript.cpp" />
     <ClCompile Include="src\project_main.cpp" />
     <None Include="engine.json" />
     <None Include="build.ps1" />
@@ -60,6 +64,9 @@
     <None Include="project.cmake" />
     <None Include="CMakeLists.txt" />
     <None Include="README.md" />
+    <None Include="EryScript\CMakeLists.txt" />
+    <None Include="EryScript\README.md" />
+    <None Include="..\DEMO\EryScriptExamples.md" Condition="Exists('$(ProjectDir)..\DEMO\EryScriptExamples.md')" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

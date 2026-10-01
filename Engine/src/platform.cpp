@@ -1,4 +1,5 @@
 #include "tiny3d/engine.hpp"
+#include "tiny3d/eryscript.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -297,6 +298,8 @@ struct WindowHandle {
 } // namespace
 
 int run(Game& game, int width, int height, unsigned frameLimit) {
+    Scripts scripts;
+    scripts.awake(game.scene());
     Renderer renderer(width, height);
     WindowState state{renderer};
     HINSTANCE instance = GetModuleHandleW(nullptr);
@@ -367,8 +370,10 @@ int run(Game& game, int width, int height, unsigned frameLimit) {
         }
         const float elapsed = std::chrono::duration<float>(frameStart - previousTime).count();
         previousTime = frameStart;
-        game.update(std::min(elapsed, .05f), input); // Avoid jumps after pauses or window dragging.
+        const float seconds = std::min(elapsed, .05f); // Avoid jumps after pauses or window dragging.
+        game.update(seconds, input);
         if (game.shouldQuit()) break;
+        scripts.update(game.scene(), seconds, input);
         applyScreenSettings(window.value, renderer, screen, game.screenSettings());
         captureMouse(window.value, state, game.captureMouse());
         renderer.render(game.scene());

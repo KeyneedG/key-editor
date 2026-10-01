@@ -1,4 +1,5 @@
 #include "tiny3d/project.hpp"
+#include "tiny3d/eryscript.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -38,6 +39,8 @@ int main(int argc, char** argv) {
         if (!game) throw std::runtime_error("createGame() returned null");
         std::cout << "Project: " << TINY3D_PROJECT_DIRECTORY << " | Mode: " << TINY3D_PROJECT_MODE << '\n';
         if (!output.empty()) {
+            tiny3d::Scripts scripts;
+            scripts.awake(game->scene());
             const auto settings = game->screenSettings();
             const int width = settings.width ? settings.width : 800;
             const int height = settings.height ? settings.height : 500;
@@ -46,6 +49,7 @@ int main(int argc, char** argv) {
             input.renderHeight = height;
             input.viewport = {0, 0, width, height};
             game->update(0, input);
+            scripts.update(game->scene(), 0, input);
             tiny3d::Renderer renderer(width, height);
             renderer.render(game->scene());
             renderer.savePPM(output.string());

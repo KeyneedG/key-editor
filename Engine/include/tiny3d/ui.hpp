@@ -41,8 +41,9 @@ class UI {
 public:
     void update(Scene& scene, const Input& input);
     void cancel() { pressed_ = nullptr; }
-private:
+    // Rebuild changed graphics without processing input/clicks again.
     void refresh(Scene& scene);
+private:
     Entity* pressed_ = nullptr;
 };
 

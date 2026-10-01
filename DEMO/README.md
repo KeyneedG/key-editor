@@ -21,6 +21,9 @@ has a capsule collider and a kinematic rigidbody: it slides along blocks, and
 gravity does not move it. The camera is its child, with an eye-height local offset
 and no collider. Mouse yaw rotates the player; pitch rotates the camera locally.
 Gold cubes remain collectibles you can walk through.
+Their floating and spinning animation runs through EryScript components embedded
+in game.cpp. Each cube has its own script variables. See
+[EryScriptExamples.md](EryScriptExamples.md) for engine and standalone examples.
 The cursor is hidden and locked at the center while the demo is focused. Captured
 clicks cannot resize or close the window through its border. Switching to another
 window releases it. Mouse sensitivity is `mouseSensitivity` in `game.cpp`.

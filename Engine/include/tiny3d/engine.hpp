@@ -290,6 +290,8 @@ class Game {
 public:
     virtual ~Game() = default;
     virtual void update(float seconds, const Input& input) = 0;
+    // Mutable access for script components; existing const accessors remain compatible.
+    virtual Scene& scene() { return const_cast<Scene&>(std::as_const(*this).scene()); }
     virtual const Scene& scene() const = 0;
     virtual std::string title() const { return "Tiny3D"; }
     virtual bool captureMouse() const { return false; }

@@ -1,6 +1,7 @@
 #include "tiny3d/project.hpp"
 #include "tiny3d/physics.hpp"
 #include "tiny3d/ui.hpp"
+#include "tiny3d/eryscript.hpp"
 
 #include <algorithm>
 
@@ -40,20 +41,19 @@ public:
         target.z = std::clamp(target.z, -6.0f, 16.0f);
         physics_.move(scene_, player, target - player.transform.position());
         physics_.step(scene_, seconds);
-        time_ += seconds;
         for (auto index : collectibles_) {
             Entity& item = scene_.entities[index];
-            item.transform.localRotation = Quaternion::fromEuler({.3f, time_, .15f});
-            item.transform.localPosition.y = .7f + .15f * std::sin(time_ * 2);
             Vector3 distance = item.transform.position() - camera.position();
             distance.y = 0;
             if (item.visible && length(distance) < .9f) {
                 item.visible = false;
+                item.getComponent<EryScript>()->enabled = false;
                 ++collected_;
             }
         }
     }
 
+    Scene& scene() override { return scene_; }
     const Scene& scene() const override { return scene_; }
     bool captureMouse() const override { return mode_ == Mode::Playing; }
     ScreenSettings screenSettings() const override { return screen_; }
@@ -112,6 +112,10 @@ private:
         canvas_->visible = mode != Mode::Playing;
         pauseMenu_->visible = mode == Mode::Pause;
         settingsMenu_->visible = mode == Mode::Settings;
+        for (auto index : collectibles_) {
+            Entity& item = scene_.entities[index];
+            item.getComponent<EryScript>()->enabled = mode == Mode::Playing && item.visible;
+        }
         if (mode == Mode::Settings) { pending_ = screen_; refreshSettingsLabels(); }
     }
 
@@ -184,7 +188,6 @@ private:
         pitch_ = .12f;
         camera.transform.localRotation = Quaternion::fromEuler({pitch_, 0, 0});
         collected_ = 0;
-        time_ = 0;
         const auto floor = std::make_shared<Mesh>(plane());
         const auto box = std::make_shared<Mesh>(cube());
         Entity ground;
@@ -216,6 +219,23 @@ private:
             item.transform.localPosition = position;
             item.transform.localScale = {.65f, .65f, .65f};
             item.addComponent<MeshRenderer>(box, Color{255, 195, 60});
+            item.addComponent<EryScript>(R"ery(
+using Tiny3D
+specify name = "Floating collectible"
+var age = 0
+
+method Awake
+    transform.localRotation = Quaternion.FromEuler(0.3, 0, 0.15)
+mend
+
+method Update
+    age = age + Time.deltaTime
+    var position = transform.localPosition
+    position.y = 0.7 + 0.15 * Math.Sin(age * 2)
+    transform.localPosition = position
+    transform.localRotation = Quaternion.FromEuler(0.3, age, 0.15)
+mend
+)ery");
             collectibles_.push_back(scene_.entities.size());
             scene_.entities.push_back(std::move(item));
         }
@@ -235,7 +255,6 @@ private:
     Entity* modeLabel_ = nullptr;
     std::vector<std::size_t> collectibles_;
     std::size_t collected_ = 0;
-    float time_ = 0;
     float yaw_ = 0, pitch_ = .12f;
     bool quit_ = false;
 };

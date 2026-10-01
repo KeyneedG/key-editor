@@ -153,6 +153,44 @@ flashing the black background between frames.
 Update your custom component behavior from `Game::update`. Input exposes
 `held`, `pressed`, and `released` for both keyboard keys and mouse buttons.
 
+## EryScript components
+
+Include tiny3d/eryscript.hpp and add an EryScript component. Its public code
+string contains the source; runOnAwake and runInUpdate both default to true.
+The engine initializes scripts before the first paint, calls parameterless
+Awake once, then calls parameterless Update after Game::update each frame.
+Missing methods are skipped. Newly added or reenabled components initialize on
+their first scripting tick; source edits recompile and reset their variables.
+Top-level statements execute once per initialization, even when both hook flags
+are false. Disabling Component::enabled suspends automatic execution without
+resetting variables; hiding an entity only affects rendering.
+
+The selected scene must be mutable. Existing scene() const overrides still work
+for games that own a mutable Scene; new games can also override Scene& scene()
+to return that scene directly. --render follows the same scripting lifecycle,
+with zero delta time. A custom loop can own Scripts and call awake(scene) once,
+then update(scene, seconds, input) each frame.
+
+The bindings expose this/entity/gameObject, transform, entity tag/layer/visible,
+parent/getChild/childCount, GetComponent<T>() or GetComponent("Type"), Vector3,
+Quaternion, Color, Time.deltaTime/time, keyboard/mouse Input, Key, MouseButton,
+and LayerMask(layer). Supported components include MeshRenderer, Camera,
+Rigidbody, box/sphere/capsule colliders, Canvas, Image, SimpleText, Button and EryScript.
+Vector, quaternion, and color properties return snapshots; assign the whole
+value back after editing it. Transform Euler angles and Quaternion.FromEuler
+use radians; FromEulerDegrees and Euler use degrees.
+
+Keep scene entity slots stable while scripts refer to other entities, as with
+other raw entity pointers. Clearing and rebuilding a scene stops old script
+callbacks. Script errors are logged once, stored in component.error(), and stop
+that script while the game continues. Edit code or call restart() to retry.
+component.runtime() provides manual method calls and custom C++ bindings.
+Changed UI graphics are refreshed after scripting, without processing clicks twice.
+
+The standalone interpreter is in [EryScript](EryScript/README.md), without engine
+or Unity dependencies. [Examples](../DEMO/EryScriptExamples.md) and the demo's
+scripted collectible animation are entirely in DEMO.
+
 ## Transforms and parents
 
 `Vector3` replaces `Vec3`; the old name is retained as an alias. Transform rotations
