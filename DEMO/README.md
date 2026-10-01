@@ -15,7 +15,7 @@ and start the demo. Both `editor` and `game` modes work the same for now.
 Set `autoStart` to `false` when using **F5** to debug.
 
 Collect the five gold cubes by walking near them. Use **WASD** to move,
-**the mouse** to look, **R** to reset, and **Escape** to exit. Progress appears
+**the mouse** to look, **R** to reset, and **Escape** to open the pause menu. Progress appears
 in the window title. Blue blocks and the floor have box colliders. A player entity
 has a capsule collider and a kinematic rigidbody: it slides along blocks, and
 gravity does not move it. The camera is its child, with an eye-height local offset
@@ -24,6 +24,21 @@ Gold cubes remain collectibles you can walk through.
 The cursor is hidden and locked at the center while the demo is focused. Captured
 clicks cannot resize or close the window through its border. Switching to another
 window releases it. Mouse sensitivity is `mouseSensitivity` in `game.cpp`.
+
+The pause menu has **Resume**, **Settings**, and **Quit**. It releases the mouse
+and pauses movement, physics, and collectible animation. Escape resumes from the
+main menu, or returns from Settings to the main menu.
+
+In Settings, click **Size** to cycle through **800x500**, **1024x768**, **1280x720**,
+**1600x900**, and **1920x1080**. Click **Mode** to toggle windowed or borderless
+fullscreen, then **Apply**. **Back** returns to the pause menu. Fullscreen fills
+the current monitor and letterboxes the selected render size when necessary.
+Changes last for the current run.
+
+The world camera renders layer 0; the orthographic UI camera renders layer 1 over
+it. Menu entities are children of a world-space Canvas in front of the UI camera.
+Images are solid-color planes, and the built-in text is made from small planes,
+so the demo needs no image or font assets.
 
 The entire `DEMO` folder is optional. After deleting it, select your own project
 or set `project` to `""` to build only the engine library. Build and API

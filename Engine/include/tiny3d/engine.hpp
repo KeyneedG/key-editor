@@ -13,6 +13,8 @@
 
 namespace tiny3d {
 
+constexpr std::uint32_t layerMask(unsigned layer) { return layer < 32 ? (std::uint32_t{1} << layer) : 0; }
+
 struct Color {
     std::uint8_t r = 255, g = 255, b = 255;
     std::uint32_t packed() const {
@@ -38,13 +40,18 @@ inline Component::~Component() = default;
 struct MeshRenderer : Component {
     std::shared_ptr<const Mesh> mesh;
     Color color{};
+    bool unlit = false;
 
     explicit MeshRenderer(std::shared_ptr<const Mesh> mesh = {}, Color color = {})
         : mesh(std::move(mesh)), color(color) {}
 };
 
 struct Camera : Component {
-    float depth = 0; // The highest enabled camera depth supplies the view.
+    float depth = 0; // Cameras render in increasing depth order.
+    std::uint32_t layers = ~std::uint32_t{0}; // All 32 layers by default.
+    bool clearColor = true;
+    bool orthographic = false;
+    float orthographicSize = 5; // Half the vertical view size, in world units.
     float fieldOfView = pi / 3; // Vertical field of view in radians.
     float nearPlane = 0.1f;
     float farPlane = 100;
@@ -53,23 +60,47 @@ struct Camera : Component {
 struct Entity {
     Transform transform{};
     bool visible = true;
+    std::uint8_t layer = 0;
+    std::string tag = "Untagged";
     std::vector<std::unique_ptr<Component>> components;
 
     Entity() = default;
     Entity(const Entity&) = delete;
     Entity& operator=(const Entity&) = delete;
-    Entity(Entity&&) noexcept = default;
+    Entity(Entity&& entity) noexcept { *this = std::move(entity); }
     Entity& operator=(Entity&& entity) noexcept {
         if (this == &entity) return *this;
+        detach();
         transform = entity.transform;
         visible = entity.visible;
+        layer = entity.layer;
+        tag = std::move(entity.tag);
         components = std::move(entity.components);
         parent_ = entity.parent_;
         transform.parent_ = parent_ ? &parent_->transform : nullptr;
+        children_ = std::move(entity.children_);
+        if (parent_) {
+            for (Entity*& child : parent_->children_) if (child == &entity) child = this;
+        }
+        for (Entity* child : children_) {
+            child->parent_ = this;
+            child->transform.parent_ = &transform;
+        }
+        entity.parent_ = nullptr;
+        entity.transform.parent_ = nullptr;
+        entity.children_.clear();
         return *this;
     }
+    ~Entity() { detach(); }
 
     Entity* parent() const { return parent_; }
+    std::size_t childCount() const { return children_.size(); }
+    Entity* getChild(std::size_t index) { return index < children_.size() ? children_[index] : nullptr; }
+    const Entity* getChild(std::size_t index) const { return index < children_.size() ? children_[index] : nullptr; }
+    bool visibleInHierarchy() const {
+        for (const Entity* entity = this; entity; entity = entity->parent_) if (!entity->visible) return false;
+        return true;
+    }
     // By default, preserve world position, rotation, and scale magnitudes.
     void setParent(Entity* parent, bool worldPositionStays = true) {
         if (parent == parent_) return;
@@ -80,6 +111,11 @@ struct Entity {
         const Quaternion rotation = transform.rotation();
         if (worldPositionStays && parent) {
             parent->transform.inversePoint(position); // Validate before changing the hierarchy.
+        }
+        if (parent) parent->children_.push_back(this);
+        if (parent_) {
+            auto& children = parent_->children_;
+            children.erase(std::remove(children.begin(), children.end(), this), children.end());
         }
         parent_ = parent;
         transform.parent_ = parent ? &parent->transform : nullptr;
@@ -120,7 +156,12 @@ struct Entity {
     }
 
 private:
+    void detach() {
+        while (!children_.empty()) children_.back()->setParent(nullptr);
+        if (parent_) setParent(nullptr);
+    }
     Entity* parent_ = nullptr;
+    std::vector<Entity*> children_;
 };
 
 struct Scene {
@@ -131,6 +172,7 @@ struct Scene {
 class Renderer {
 public:
     Renderer(int width, int height);
+    void resize(int width, int height);
     void render(const Scene& scene, Color background = {28, 36, 52});
     void savePPM(const std::string& path) const;
 
@@ -190,11 +232,24 @@ struct ButtonState {
     }
 };
 
+struct Viewport { int x = 0, y = 0, width = 0, height = 0; };
+
+// The renderer and UI use the same letterboxed rectangle in client pixels.
+inline Viewport fitViewport(int clientWidth, int clientHeight, int renderWidth, int renderHeight) {
+    if (clientWidth <= 0 || clientHeight <= 0 || renderWidth <= 0 || renderHeight <= 0) return {};
+    const int width = static_cast<int>(std::min<std::int64_t>(clientWidth,
+        std::int64_t(clientHeight) * renderWidth / renderHeight));
+    const int height = static_cast<int>(std::int64_t(width) * renderHeight / renderWidth);
+    return {(clientWidth - width) / 2, (clientHeight - height) / 2, width, height};
+}
+
 struct Input {
     std::array<ButtonState, static_cast<std::size_t>(Key::Count)> keys{};
     std::array<ButtonState, static_cast<std::size_t>(MouseButton::Count)> mouseButtons{};
     bool focused = false;
     int mouseX = 0, mouseY = 0; // Client pixels, origin at the top-left.
+    int renderWidth = 800, renderHeight = 500;
+    Viewport viewport{0, 0, 800, 500};
     float mouseDeltaX = 0, mouseDeltaY = 0; // Raw movement accumulated this frame.
     float mouseWheel = 0, mouseWheelHorizontal = 0; // Wheel steps accumulated this frame.
 
@@ -221,6 +276,15 @@ struct Input {
     }
 };
 
+struct ScreenSettings {
+    int width = 0, height = 0; // Zero keeps the initial/current rendering size.
+    bool fullscreen = false; // Borderless fullscreen on the current monitor.
+    bool operator==(const ScreenSettings& other) const {
+        return width == other.width && height == other.height && fullscreen == other.fullscreen;
+    }
+    bool operator!=(const ScreenSettings& other) const { return !(*this == other); }
+};
+
 // Own your game state in a subclass. The platform supplies input and elapsed seconds.
 class Game {
 public:
@@ -230,6 +294,7 @@ public:
     virtual std::string title() const { return "Tiny3D"; }
     virtual bool captureMouse() const { return false; }
     virtual bool shouldQuit() const { return false; }
+    virtual ScreenSettings screenSettings() const { return {}; }
 };
 
 // Native Windows window. Other platforms can use Renderer directly.

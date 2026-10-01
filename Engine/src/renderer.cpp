@@ -20,11 +20,15 @@ Mesh plane() {
             {{0, 2, 1}, {0, 3, 2}}};
 }
 
-Renderer::Renderer(int width, int height) : width_(width), height_(height) {
+Renderer::Renderer(int width, int height) { resize(width, height); }
+
+void Renderer::resize(int width, int height) {
     if (width <= 0 || height <= 0) throw std::invalid_argument("Renderer dimensions must be positive");
     const auto count = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
     pixels_.resize(count);
     depth_.resize(count);
+    width_ = width;
+    height_ = height;
 }
 
 namespace {
@@ -63,64 +67,69 @@ Color shade(Color color, float brightness) {
 
 void Renderer::render(const Scene& scene, Color background) {
     std::fill(pixels_.begin(), pixels_.end(), background.packed());
-    std::fill(depth_.begin(), depth_.end(), 0.0f);
-
-    const Camera* activeCamera = nullptr;
-    const Transform* cameraTransform = nullptr;
+    struct View { const Camera* camera; const Transform* transform; };
+    std::vector<View> views;
     for (const Entity& entity : scene.entities) {
-        if (!entity.visible) continue;
+        if (!entity.visibleInHierarchy()) continue;
         for (const auto& component : entity.components) {
             const auto* camera = dynamic_cast<const Camera*>(component.get());
-            if (camera && camera->enabled && (!activeCamera || camera->depth > activeCamera->depth)) {
-                activeCamera = camera;
-                cameraTransform = &entity.transform;
-            }
+            if (camera && camera->enabled) views.push_back({camera, &entity.transform});
         }
     }
-    if (!activeCamera) return;
-    const Camera& camera = *activeCamera;
-    const Vector3 viewPosition = cameraTransform->position();
-    const Quaternion viewRotation = cameraTransform->rotation();
-    if (!(camera.nearPlane > 0 && camera.farPlane > camera.nearPlane &&
-          camera.fieldOfView > 0 && camera.fieldOfView < pi)) {
-        throw std::invalid_argument("Invalid camera projection");
-    }
-    const float halfY = std::tan(camera.fieldOfView * .5f);
-    const float halfX = halfY * static_cast<float>(width_) / static_cast<float>(height_);
-    const std::array<ClipPlane, 6> planes{{
-        {{0, 0, 1}, -camera.nearPlane}, {{0, 0, -1}, camera.farPlane},
-        {{1, 0, halfX}, 0}, {{-1, 0, halfX}, 0},
-        {{0, 1, halfY}, 0}, {{0, -1, halfY}, 0}
-    }};
+    std::stable_sort(views.begin(), views.end(), [](const View& a, const View& b) {
+        return a.camera->depth < b.camera->depth;
+    });
     const Vector3 light = normalized({-.5f, 1, -.4f});
-    const auto project = [&](Vector3 v) -> ScreenPoint {
-        return {(v.x / (v.z * halfX) + 1) * .5f * static_cast<float>(width_),
-                (1 - v.y / (v.z * halfY)) * .5f * static_cast<float>(height_), 1 / v.z};
-    };
-
-    for (const Entity& entity : scene.entities) {
-        if (!entity.visible) continue;
-        for (const auto& component : entity.components) {
-            const auto* visual = dynamic_cast<const MeshRenderer*>(component.get());
-            if (!visual || !visual->enabled || !visual->mesh) continue;
-            const Mesh& mesh = *visual->mesh;
-            std::vector<Vector3> world;
-            world.reserve(mesh.vertices.size());
-            for (Vector3 v : mesh.vertices) world.push_back(entity.transform.point(v));
-            for (const auto& indices : mesh.triangles) {
-                for (auto index : indices) {
-                    if (index >= world.size()) throw std::invalid_argument("Mesh index out of bounds");
-                }
-                const Vector3 a = world[indices[0]], b = world[indices[1]], c = world[indices[2]];
-                const Vector3 normal = cross(b - a, c - a);
-                if (dot(normal, a - viewPosition) >= 0) continue; // Back face or degenerate.
-                const float brightness = .25f + .75f * std::max(0.0f, dot(normalized(normal), light));
-                const auto color = shade(visual->color, std::min(brightness, 1.0f)).packed();
-                std::vector<Vector3> polygon;
-                for (Vector3 v : {a, b, c}) polygon.push_back(inverseRotate(v - viewPosition, viewRotation));
-                for (const auto& plane : planes) polygon = clip(polygon, plane);
-                for (std::size_t i = 1; i + 1 < polygon.size(); ++i) {
-                    triangle(project(polygon[0]), project(polygon[i]), project(polygon[i + 1]), color);
+    for (const View& view : views) {
+        const Camera& camera = *view.camera;
+        if (!(camera.nearPlane > 0 && camera.farPlane > camera.nearPlane) ||
+            (camera.orthographic ? !(camera.orthographicSize > 0) :
+                !(camera.fieldOfView > 0 && camera.fieldOfView < pi))) {
+            throw std::invalid_argument("Invalid camera projection");
+        }
+        if (camera.clearColor) std::fill(pixels_.begin(), pixels_.end(), background.packed());
+        std::fill(depth_.begin(), depth_.end(), 0.f);
+        const Vector3 viewPosition = view.transform->position();
+        const Quaternion viewRotation = view.transform->rotation();
+        const float halfY = camera.orthographic ? camera.orthographicSize : std::tan(camera.fieldOfView * .5f);
+        const float halfX = halfY * static_cast<float>(width_) / static_cast<float>(height_);
+        const std::array<ClipPlane, 6> planes = camera.orthographic ?
+            std::array<ClipPlane, 6>{{{{0, 0, 1}, -camera.nearPlane}, {{0, 0, -1}, camera.farPlane},
+                {{1, 0, 0}, halfX}, {{-1, 0, 0}, halfX}, {{0, 1, 0}, halfY}, {{0, -1, 0}, halfY}}} :
+            std::array<ClipPlane, 6>{{{{0, 0, 1}, -camera.nearPlane}, {{0, 0, -1}, camera.farPlane},
+                {{1, 0, halfX}, 0}, {{-1, 0, halfX}, 0}, {{0, 1, halfY}, 0}, {{0, -1, halfY}, 0}}};
+        const auto project = [&](Vector3 v) -> ScreenPoint {
+            const float divisor = camera.orthographic ? 1 : v.z;
+            return {(v.x / (divisor * halfX) + 1) * .5f * static_cast<float>(width_),
+                    (1 - v.y / (divisor * halfY)) * .5f * static_cast<float>(height_),
+                    camera.orthographic ? camera.farPlane + 1 - v.z : 1 / v.z};
+        };
+        for (const Entity& entity : scene.entities) {
+            if (!entity.visibleInHierarchy() || !(camera.layers & layerMask(entity.layer))) continue;
+            for (const auto& component : entity.components) {
+                const auto* visual = dynamic_cast<const MeshRenderer*>(component.get());
+                if (!visual || !visual->enabled || !visual->mesh) continue;
+                const Mesh& mesh = *visual->mesh;
+                std::vector<Vector3> world;
+                world.reserve(mesh.vertices.size());
+                for (Vector3 v : mesh.vertices) world.push_back(entity.transform.point(v));
+                for (const auto& indices : mesh.triangles) {
+                    for (auto index : indices) {
+                        if (index >= world.size()) throw std::invalid_argument("Mesh index out of bounds");
+                    }
+                    const Vector3 a = world[indices[0]], b = world[indices[1]], c = world[indices[2]];
+                    const Vector3 normal = cross(b - a, c - a);
+                    const float facing = camera.orthographic ? dot(normal, rotate({0, 0, 1}, viewRotation)) :
+                        dot(normal, a - viewPosition);
+                    if (facing >= 0) continue;
+                    const float brightness = visual->unlit ? 1 : .25f + .75f * std::max(0.f, dot(normalized(normal), light));
+                    const auto color = shade(visual->color, std::min(brightness, 1.f)).packed();
+                    std::vector<Vector3> polygon;
+                    for (Vector3 v : {a, b, c}) polygon.push_back(inverseRotate(v - viewPosition, viewRotation));
+                    for (const auto& plane : planes) polygon = clip(polygon, plane);
+                    for (std::size_t i = 1; i + 1 < polygon.size(); ++i) {
+                        triangle(project(polygon[0]), project(polygon[i]), project(polygon[i + 1]), color);
+                    }
                 }
             }
         }

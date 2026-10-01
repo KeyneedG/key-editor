@@ -10,6 +10,9 @@
     <ClCompile Include="src\physics.cpp">
       <Filter>Engine</Filter>
     </ClCompile>
+    <ClCompile Include="src\ui.cpp">
+      <Filter>Engine</Filter>
+    </ClCompile>
     <ClCompile Include="src\renderer.cpp">
       <Filter>Engine</Filter>
     </ClCompile>
@@ -28,6 +31,9 @@
       <Filter>Engine</Filter>
     </ClInclude>
     <ClInclude Include="include\tiny3d\project.hpp">
+      <Filter>Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="include\tiny3d\ui.hpp">
       <Filter>Engine</Filter>
     </ClInclude>
   </ItemGroup>

@@ -23,6 +23,49 @@ struct WindowState {
     POINT absoluteMousePosition{};
 };
 
+struct ScreenState {
+    ScreenSettings requested{};
+    RECT windowedBounds{};
+    bool initialized = false, fullscreen = false;
+};
+
+void applyScreenSettings(HWND window, Renderer& renderer, ScreenState& state, ScreenSettings settings) {
+    if (state.initialized && settings == state.requested) return;
+    if (settings.width < 0 || settings.height < 0) throw std::invalid_argument("Screen dimensions cannot be negative");
+    const int width = settings.width ? settings.width : renderer.width();
+    const int height = settings.height ? settings.height : renderer.height();
+    RECT bounds{};
+    GetWindowRect(window, &bounds);
+    if (!state.fullscreen) state.windowedBounds = bounds;
+    if (settings.fullscreen) {
+        MONITORINFO monitor{};
+        monitor.cbSize = sizeof(monitor);
+        if (!GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor)) {
+            throw std::runtime_error("Cannot get fullscreen monitor bounds");
+        }
+        bounds = monitor.rcMonitor;
+    } else {
+        RECT client{0, 0, width, height};
+        if (!AdjustWindowRect(&client, WS_OVERLAPPEDWINDOW, FALSE)) throw std::runtime_error("Cannot size window");
+        const int x = state.windowedBounds.left, y = state.windowedBounds.top;
+        bounds = {x, y, x + client.right - client.left, y + client.bottom - client.top};
+    }
+    const LONG_PTR style = (GetWindowLongPtrW(window, GWL_STYLE) & WS_VISIBLE) |
+        (settings.fullscreen ? WS_POPUP : WS_OVERLAPPEDWINDOW);
+    SetLastError(0);
+    if (!SetWindowLongPtrW(window, GWL_STYLE, style) && GetLastError() != 0) {
+        throw std::runtime_error("Cannot change window mode");
+    }
+    if (!SetWindowPos(window, nullptr, bounds.left, bounds.top, bounds.right - bounds.left,
+        bounds.bottom - bounds.top, SWP_NOZORDER | SWP_FRAMECHANGED)) {
+        throw std::runtime_error("Cannot apply screen settings");
+    }
+    if (renderer.width() != width || renderer.height() != height) renderer.resize(width, height);
+    state.requested = settings;
+    state.fullscreen = settings.fullscreen;
+    state.initialized = true;
+}
+
 void captureMouse(HWND window, WindowState& state, bool capture) {
     capture = capture && state.input.focused && !IsIconic(window);
     if (capture) {
@@ -109,10 +152,8 @@ void present(HWND window, HDC dc, const Renderer& renderer) {
     RECT client{};
     GetClientRect(window, &client);
     FillRect(dc, &client, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-    const int w = client.right, h = client.bottom;
-    if (w <= 0 || h <= 0) return;
-    const int drawWidth = std::min(w, MulDiv(h, renderer.width(), renderer.height()));
-    const int drawHeight = MulDiv(drawWidth, renderer.height(), renderer.width());
+    const Viewport viewport = fitViewport(client.right, client.bottom, renderer.width(), renderer.height());
+    if (viewport.width <= 0 || viewport.height <= 0) return;
     BITMAPINFO bitmap{};
     bitmap.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     bitmap.bmiHeader.biWidth = renderer.width();
@@ -120,7 +161,7 @@ void present(HWND window, HDC dc, const Renderer& renderer) {
     bitmap.bmiHeader.biPlanes = 1;
     bitmap.bmiHeader.biBitCount = 32;
     bitmap.bmiHeader.biCompression = BI_RGB;
-    StretchDIBits(dc, (w - drawWidth) / 2, (h - drawHeight) / 2, drawWidth, drawHeight,
+    StretchDIBits(dc, viewport.x, viewport.y, viewport.width, viewport.height,
                  0, 0, renderer.width(), renderer.height(), renderer.pixels().data(),
                  &bitmap, DIB_RGB_COLORS, SRCCOPY);
 }
@@ -241,6 +282,8 @@ int run(Game& game, int width, int height, unsigned frameLimit) {
         throw std::runtime_error("Cannot register mouse input");
     }
     window.rawMouse = true;
+    ScreenState screen;
+    applyScreenSettings(window.value, renderer, screen, game.screenSettings());
     ShowWindow(window.value, SW_SHOW);
 
     constexpr std::array<int, 5> mouseButtons{VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2};
@@ -262,6 +305,11 @@ int run(Game& game, int width, int height, unsigned frameLimit) {
             DispatchMessageW(&message);
         }
         if (!state.running) break;
+        RECT client{};
+        GetClientRect(window.value, &client);
+        input.renderWidth = renderer.width();
+        input.renderHeight = renderer.height();
+        input.viewport = fitViewport(client.right, client.bottom, renderer.width(), renderer.height());
         if (input.focused) {
             for (int key = 0; key < 256; ++key) {
                 // Events distinguish Enter keys and handle PrintScreen's key-up-only pulse.
@@ -281,6 +329,7 @@ int run(Game& game, int width, int height, unsigned frameLimit) {
         previousTime = frameStart;
         game.update(std::min(elapsed, .05f), input); // Avoid jumps after pauses or window dragging.
         if (game.shouldQuit()) break;
+        applyScreenSettings(window.value, renderer, screen, game.screenSettings());
         captureMouse(window.value, state, game.captureMouse());
         renderer.render(game.scene());
         const std::string title = game.title();

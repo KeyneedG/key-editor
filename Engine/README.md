@@ -6,8 +6,8 @@ Win32/GDI. CMake reads JSON without a separate JSON library.
 
 ```text
 Engine/
-  include/tiny3d/    Public math, engine, physics, and project API
-  src/              Renderer, physics, window/input loop, and project entry point
+  include/tiny3d/    Public math, engine, physics, UI, and project API
+  src/              Renderer, physics, UI, window/input loop, and project entry point
   Tiny3D.sln        Visual Studio editor solution
   Tiny3D.vcxproj    Editor project, including C++17 IntelliSense settings
   engine.json       Selected project, mode, and automatic startup
@@ -105,22 +105,32 @@ Include `tiny3d/project.hpp`, derive a class from `tiny3d::Game`, and implement:
 - Optionally `title() const` for the window title.
 - Optionally `captureMouse() const` to hide and confine the cursor while focused.
 - Optionally `shouldQuit() const` to end the game loop.
+- Optionally `screenSettings() const` to request a rendering size and window mode.
 
 Implement `std::unique_ptr<tiny3d::Game> tiny3d::createGame()` to construct your
 game. The engine supplies `main()` through `src/project_main.cpp`.
 
 Own the scene in your game class. Each `Entity` has a transform, visibility flag,
-and an owned list of components. `Component` is abstract with a virtual destructor;
+`layer` (0 by default), `tag` (`"Untagged"` by default), and an owned list of components.
+`Component` is abstract with a virtual destructor;
 derive from it to add your own component types. Use `addComponent<T>(...)` to
 construct a component and `getComponent<T>()` to find the first matching component
 (or `nullptr`). Components have an `enabled` flag.
 
 `MeshRenderer` combines a shared mesh and its color in one component. `Camera`
 is a component too; its position and rotation come from its entity's transform.
-The renderer chooses the enabled camera with the highest `depth` on a visible
-entity every frame. Negative depths work; ties use the first camera in scene and
-component order. Without an eligible camera, the frame contains only the background.
-Camera scale does not affect the view.
+The renderer draws enabled cameras on visible entities in increasing `depth` order.
+Negative depths work; equal depths follow scene and component order. Each camera
+clears its depth buffer. `clearColor` defaults to `true`; set it to `false` for an
+overlay camera that retains earlier cameras' color. Without an eligible camera,
+the frame contains only the background. Camera scale does not affect the view.
+
+Layers are numbered 0-31. `Camera::layers` is a 32-bit mask and defaults to all
+layers. Use `camera.layers = layerMask(0)` or combine masks with `|`. Layers filter
+rendering and UI picking. Tags are plain strings you can use in game logic.
+`Camera::orthographic` defaults to `false`; when enabled, `orthographicSize` is
+half the vertical view size in world units. `MeshRenderer::unlit` draws exact
+component colors, which is useful for UI.
 
 ```cpp
 Entity camera;
@@ -156,8 +166,15 @@ Use `entity.setParent(&parent)` and `entity.parent()`. Parenting preserves world
 position, rotation, and scale magnitudes by default. Pass `false` to keep local
 values instead. `setParent(nullptr)` detaches; cycles are rejected. Add entities
 to `scene.entities` before linking them. This container is a `deque`, so appending
-does not invalidate entity references or parent pointers. Keep parents alive;
-detach their children before removing or moving linked entities.
+does not invalidate entity references or parent pointers. `getChild(index)` returns
+a direct child in parenting order, or `nullptr` for an invalid index; const access
+is available too. `childCount()` reports the number of direct children. Reparenting
+updates both child lists. Destroying a parent detaches its children while retaining
+world position, rotation, and scale magnitudes. Keep entities in their scene slots when other components hold
+raw pointers to them.
+
+`visibleInHierarchy()` includes ancestor visibility. Hiding a parent hides its
+rendered descendants and stops UI picking; it does not disable their physics.
 
 ```cpp
 Entity& player = scene.entities.emplace_back();
@@ -291,6 +308,86 @@ Faces wind counterclockwise when seen from outside. Coordinates use +Y up and +Z
 forward; Euler angles are radians, applied X, Y, then Z. Colors are solid with
 flat lighting. The renderer handles perspective, six-plane clipping, back-face
 culling, and perspective-correct depth testing.
+
+## Canvas UI
+
+Include `tiny3d/ui.hpp` and own a `UI` instance in your game. Call
+`ui.update(scene, input)` each frame, including while gameplay is paused. The UI
+module lives in `src/ui.cpp` and uses the normal mesh renderer. It requires no
+textures, font files, operating-system font rendering, or external libraries.
+
+- `Canvas` identifies a world-space UI hierarchy. Assign its `camera` and place
+  the entity in front of that camera, usually as the camera's child.
+- `Image` is an XY rectangle with `width`, `height`, and a solid `color`.
+- `SimpleText` builds a 5x7 font from small XY planes. Set `text`, `color`, and
+  `pixelSize` in local units. Letters, digits, common punctuation, spaces, and
+  newlines work; lowercase uses uppercase shapes, and unsupported bytes use `?`.
+  `centered` defaults to `true`; `false` places the top-left at the entity origin.
+- `Button` belongs on an entity with an `Image`. Set `onClick` and optionally
+  its normal/hover/pressed/disabled colors. `interactable` disables clicks;
+  `hovered` and `pressed` report the current UI state. Put a text label on a child.
+
+Use one graphic (`Image` or `SimpleText`) per entity. UI creates or updates that
+entity's `MeshRenderer`; geometry is rebuilt only when dimensions or text change.
+All graphics are unlit and face local -Z. Assign each graphic to the UI layer;
+entity layers are not inherited. Place label planes slightly nearer the camera
+than the button plane to avoid equal-depth overlap.
+
+```cpp
+Entity& uiCamera = scene.entities.emplace_back();
+auto& view = uiCamera.addComponent<Camera>();
+view.layers = layerMask(1);
+view.depth = 10;
+view.clearColor = false;
+view.orthographic = true;
+view.orthographicSize = 250; // 500 world units vertically, independent of pixel resolution.
+
+Entity& canvas = scene.entities.emplace_back();
+canvas.setParent(&uiCamera, false);
+canvas.transform.localPosition = {0, 0, 5};
+canvas.addComponent<Canvas>().camera = &uiCamera;
+
+Entity& button = scene.entities.emplace_back();
+button.layer = 1;
+button.setParent(&canvas, false);
+button.addComponent<Image>().width = 200;
+button.addComponent<Button>().onClick = [] { /* Handle the action. */ };
+
+Entity& label = scene.entities.emplace_back();
+label.layer = 1;
+label.setParent(&button, false);
+label.transform.localPosition.z = -.02f;
+label.addComponent<SimpleText>().text = "RESUME";
+```
+
+Set the world camera's mask to `layerMask(0)` for this two-camera setup. Rectangular
+button picking supports perspective and orthographic cameras, hierarchy transforms,
+and letterboxing through `Input::viewport`, `renderWidth`, and `renderHeight`.
+A click requires pressing and releasing over the same button. Focus loss cancels
+the press. Hidden, disabled, masked, or back-facing buttons do not receive clicks.
+Picking selects the nearest button for the camera with the highest depth; it does
+not test occlusion against non-button meshes. Keep the assigned canvas camera alive.
+Call `ui.cancel()` when rebuilding a scene or switching menus.
+
+## Screen settings
+
+Override `Game::screenSettings()` and return your current requested settings:
+
+```cpp
+ScreenSettings screen_{800, 500, false};
+ScreenSettings screenSettings() const override { return screen_; }
+// In a settings button callback:
+// screen_ = {1280, 720, true};
+```
+
+The Windows backend applies changes after `update`. Width and height set both the
+rendering resolution and the windowed client size; a zero dimension keeps the
+current size. Fullscreen is a borderless window covering the current monitor,
+with the selected rendering resolution fitted into it. Returning to windowed mode
+restores the previous position and the selected client size. Manual resizing
+letterboxes the rendered image until you request a different resolution.
+The backend updates `Input::viewport` for correct UI clicks. Settings remain in
+memory for the current run; persistence is up to your game.
 
 ## Direct CMake build
 
