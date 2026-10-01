@@ -16,10 +16,13 @@ Set `autoStart` to `false` when using **F5** to debug.
 
 Collect the five gold cubes by walking near them. Use **WASD** to move,
 **the mouse** to look, **R** to reset, and **Escape** to exit. Progress appears
-in the window title. Blue blocks and the floor have box colliders. The camera
-has a sphere collider and a kinematic rigidbody: it slides along blocks, and
-gravity does not move it. Gold cubes remain collectibles you can walk through.
-The cursor is hidden and confined while the demo is focused. Switching to another
+in the window title. Blue blocks and the floor have box colliders. A player entity
+has a capsule collider and a kinematic rigidbody: it slides along blocks, and
+gravity does not move it. The camera is its child, with an eye-height local offset
+and no collider. Mouse yaw rotates the player; pitch rotates the camera locally.
+Gold cubes remain collectibles you can walk through.
+The cursor is hidden and locked at the center while the demo is focused. Captured
+clicks cannot resize or close the window through its border. Switching to another
 window releases it. Mouse sensitivity is `mouseSensitivity` in `game.cpp`.
 
 The entire `DEMO` folder is optional. After deleting it, select your own project

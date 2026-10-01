@@ -29,19 +29,19 @@ Renderer::Renderer(int width, int height) : width_(width), height_(height) {
 
 namespace {
 struct ClipPlane {
-    Vec3 normal;
+    Vector3 normal;
     float offset;
-    float distance(Vec3 v) const { return dot(normal, v) + offset; }
+    float distance(Vector3 v) const { return dot(normal, v) + offset; }
 };
 
 // Clip before projecting, including triangles that cross the camera's near plane.
-std::vector<Vec3> clip(const std::vector<Vec3>& polygon, const ClipPlane& plane) {
-    std::vector<Vec3> result;
+std::vector<Vector3> clip(const std::vector<Vector3>& polygon, const ClipPlane& plane) {
+    std::vector<Vector3> result;
     if (polygon.empty()) return result;
     result.reserve(polygon.size() + 1);
-    Vec3 previous = polygon.back();
+    Vector3 previous = polygon.back();
     float previousDistance = plane.distance(previous);
-    for (Vec3 current : polygon) {
+    for (Vector3 current : polygon) {
         const float currentDistance = plane.distance(current);
         if ((currentDistance >= 0) != (previousDistance >= 0)) {
             const float t = previousDistance / (previousDistance - currentDistance);
@@ -79,7 +79,8 @@ void Renderer::render(const Scene& scene, Color background) {
     }
     if (!activeCamera) return;
     const Camera& camera = *activeCamera;
-    const Transform& view = *cameraTransform;
+    const Vector3 viewPosition = cameraTransform->position();
+    const Quaternion viewRotation = cameraTransform->rotation();
     if (!(camera.nearPlane > 0 && camera.farPlane > camera.nearPlane &&
           camera.fieldOfView > 0 && camera.fieldOfView < pi)) {
         throw std::invalid_argument("Invalid camera projection");
@@ -91,8 +92,8 @@ void Renderer::render(const Scene& scene, Color background) {
         {{1, 0, halfX}, 0}, {{-1, 0, halfX}, 0},
         {{0, 1, halfY}, 0}, {{0, -1, halfY}, 0}
     }};
-    const Vec3 light = normalized({-.5f, 1, -.4f});
-    const auto project = [&](Vec3 v) -> ScreenPoint {
+    const Vector3 light = normalized({-.5f, 1, -.4f});
+    const auto project = [&](Vector3 v) -> ScreenPoint {
         return {(v.x / (v.z * halfX) + 1) * .5f * static_cast<float>(width_),
                 (1 - v.y / (v.z * halfY)) * .5f * static_cast<float>(height_), 1 / v.z};
     };
@@ -103,20 +104,20 @@ void Renderer::render(const Scene& scene, Color background) {
             const auto* visual = dynamic_cast<const MeshRenderer*>(component.get());
             if (!visual || !visual->enabled || !visual->mesh) continue;
             const Mesh& mesh = *visual->mesh;
-            std::vector<Vec3> world;
+            std::vector<Vector3> world;
             world.reserve(mesh.vertices.size());
-            for (Vec3 v : mesh.vertices) world.push_back(entity.transform.point(v));
+            for (Vector3 v : mesh.vertices) world.push_back(entity.transform.point(v));
             for (const auto& indices : mesh.triangles) {
                 for (auto index : indices) {
                     if (index >= world.size()) throw std::invalid_argument("Mesh index out of bounds");
                 }
-                const Vec3 a = world[indices[0]], b = world[indices[1]], c = world[indices[2]];
-                const Vec3 normal = cross(b - a, c - a);
-                if (dot(normal, a - view.position) >= 0) continue; // Back face or degenerate.
+                const Vector3 a = world[indices[0]], b = world[indices[1]], c = world[indices[2]];
+                const Vector3 normal = cross(b - a, c - a);
+                if (dot(normal, a - viewPosition) >= 0) continue; // Back face or degenerate.
                 const float brightness = .25f + .75f * std::max(0.0f, dot(normalized(normal), light));
                 const auto color = shade(visual->color, std::min(brightness, 1.0f)).packed();
-                std::vector<Vec3> polygon;
-                for (Vec3 v : {a, b, c}) polygon.push_back(inverseRotate(v - view.position, view.rotation));
+                std::vector<Vector3> polygon;
+                for (Vector3 v : {a, b, c}) polygon.push_back(inverseRotate(v - viewPosition, viewRotation));
                 for (const auto& plane : planes) polygon = clip(polygon, plane);
                 for (std::size_t i = 1; i + 1 < polygon.size(); ++i) {
                     triangle(project(polygon[0]), project(polygon[i]), project(polygon[i + 1]), color);

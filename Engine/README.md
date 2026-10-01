@@ -124,7 +124,7 @@ Camera scale does not affect the view.
 
 ```cpp
 Entity camera;
-camera.transform.position = {0, 1, -5};
+camera.transform.localPosition = {0, 1, -5};
 camera.addComponent<Camera>().depth = 10;
 scene.entities.push_back(std::move(camera));
 
@@ -139,6 +139,46 @@ with `std::move` rather than copying. Mesh data can be shared by multiple
 The engine updates the game and calls `Renderer::render(scene)` every frame.
 Update your custom component behavior from `Game::update`. Input exposes
 `held`, `pressed`, and `released` for both keyboard keys and mouse buttons.
+
+## Transforms and parents
+
+`Vector3` replaces `Vec3`; the old name is retained as an alias. Transform rotations
+are `Quaternion` values. Local fields are `localPosition`, `localRotation`, and
+`localScale`. World values are calculated through `position()`, `rotation()`, and
+`lossyScale()`, so changing a parent immediately affects its descendants. Use
+`setPosition(...)` and `setRotation(...)` to write world values. `lossyScale()`
+reports world axis lengths; rotation combined with nonuniform parent scaling can
+produce shear, which cannot be represented by a rotation and three scale values.
+`point(...)`, `inversePoint(...)`, and `vector(...)` convert through the whole
+hierarchy. `right()`, `up()`, and `forward()` return world rotation directions.
+
+Use `entity.setParent(&parent)` and `entity.parent()`. Parenting preserves world
+position, rotation, and scale magnitudes by default. Pass `false` to keep local
+values instead. `setParent(nullptr)` detaches; cycles are rejected. Add entities
+to `scene.entities` before linking them. This container is a `deque`, so appending
+does not invalidate entity references or parent pointers. Keep parents alive;
+detach their children before removing or moving linked entities.
+
+```cpp
+Entity& player = scene.entities.emplace_back();
+player.transform.localPosition = {0, 0, -5};
+Entity& camera = scene.entities.emplace_back();
+camera.addComponent<Camera>();
+camera.setParent(&player, false);
+camera.transform.localPosition = {0, 1.5f, 0};
+
+player.transform.localRotation = Quaternion::fromEuler({0, yaw, 0});
+camera.transform.localRotation = Quaternion::fromEuler({pitch, 0, 0});
+Vector3 angles = camera.transform.rotation().toEuler();
+```
+
+Euler vectors are angles, not direction vectors. `Quaternion::fromEuler(Vector3)`
+and `toEuler()` use radians, applied X, then Y, then Z. For degrees, use
+`fromEulerDegrees(...)` and `toEulerDegrees()`. `axisAngle(axis, radians)`,
+quaternion multiplication, `rotate(vector, quaternion)`, and `inverse(quaternion)`
+are also available. Quaternion multiplication applies the right operand first.
+Transforms also offer `eulerAngles()`, `localEulerAngles()`, `setEulerAngles(...)`,
+and `setLocalEulerAngles(...)`, all in radians. Euler representations are not unique.
 
 ## Keyboard and mouse input
 
@@ -168,8 +208,10 @@ so captured movement continues at screen edges. Multiply movement by sensitivity
 without multiplying by elapsed seconds:
 
 ```cpp
-camera.transform.rotation.y += input.mouseDeltaX * .0025f;
-camera.transform.rotation.x += input.mouseDeltaY * .0025f;
+yaw += input.mouseDeltaX * .0025f;
+pitch = std::clamp(pitch + input.mouseDeltaY * .0025f, -1.2f, 1.2f);
+player.transform.localRotation = Quaternion::fromEuler({0, yaw, 0});
+camera.transform.localRotation = Quaternion::fromEuler({pitch, 0, 0});
 ```
 
 `mouseWheel` is vertical scrolling (positive is up/away); `mouseWheelHorizontal`
@@ -180,8 +222,10 @@ between frames still produce both edges, so short taps/clicks are not discarded.
 discards pending movement and scrolling.
 
 Return `true` from `Game::captureMouse()` for mouse look. The engine hides and
-confines the cursor only while your window is focused, and restores it on focus
-loss or exit. Its default is `false` for games that need a free cursor. To quit
+locks the cursor at the client center only while your window is focused, and
+restores it on focus loss or exit. Captured mouse clicks cannot activate resize
+borders or title-bar buttons. `mouseX`/`mouseY` stay near the center during capture;
+use raw deltas for looking. Its default is `false` for games that need a free cursor. To quit
 on Escape, handle `input.pressed(Key::Escape)` in your game and return `true` from
 `shouldQuit()`; the engine also handles the window's close button and Alt+F4.
 
@@ -192,6 +236,9 @@ Include `tiny3d/physics.hpp`. Components and simulation are in `physics.hpp` and
 
 - `BoxCollider`: local `center` and full local `size` (default 1 in each axis).
 - `SphereCollider`: local `center` and `radius` (default .5).
+- `CapsuleCollider`: local `center`, `radius` (default .5), and full `height`
+  including caps (default 2). Its axis is local Y; height must be at least twice
+  the radius. It rotates with its entity and inherits the parent's transform.
 - `Rigidbody`: `velocity`, positive `mass`, `useGravity`, and `isKinematic`.
 
 Use one enabled collider and one rigidbody per entity. A collider without an
@@ -208,24 +255,34 @@ Its configurable `gravity` defaults to `{0, -9.81f, 0}`. A body without a collid
 still moves, but has no collision response.
 
 ```cpp
-Entity camera;
+Entity& player = scene.entities.emplace_back();
+auto& capsule = player.addComponent<CapsuleCollider>();
+capsule.center = {0, .9f, 0};
+capsule.radius = .35f;
+capsule.height = 1.8f;
+player.addComponent<Rigidbody>().isKinematic = true;
+player.transform.localPosition = {0, 0, -5};
+Entity& camera = scene.entities.emplace_back();
 camera.addComponent<Camera>();
-camera.addComponent<SphereCollider>().radius = .35f;
-camera.addComponent<Rigidbody>().isKinematic = true;
-camera.transform.position = {0, 1.5f, -5};
-scene.entities.push_back(std::move(camera));
+camera.setParent(&player, false);
+camera.transform.localPosition = {0, 1.5f, 0};
 
-// In update: use this for a kinematic camera's movement, then step dynamic bodies.
-physics.move(scene, scene.entities[0], movement * seconds);
+// In update: move the capsule player; the camera follows through parenting.
+physics.move(scene, player, movement * seconds);
 physics.step(scene, seconds);
 ```
 
 `Physics::move` breaks displacement into small pieces and corrects overlap so
 the moved entity stops and slides against colliders. It does not push other
 entities; direct transform writes are teleports and bypass this movement path.
-Collider centers and dimensions follow entity transforms. Sphere radius uses
-the largest absolute scale axis. Boxes use world axis-aligned bounds, including
-the enclosure of rotated boxes. This is deliberately linear physics: no angular
+Collider centers and dimensions follow the complete entity hierarchy. Sphere
+radius uses the largest world axis scale. Capsule radius uses the larger X/Z
+scale, and height uses Y scale, clamped to at least the world diameter. Sheared
+hierarchies are approximated with round sphere/capsule shapes. Boxes use world
+axis-aligned bounds, including the enclosure of rotated boxes. Rigidbody velocity
+and `Physics::move` displacement are world vectors. Ancestors and descendants do
+not collide with each other; compound rigidbodies are not implemented.
+This is deliberately linear physics: no angular
 motion, friction, bouncing, triggers, or continuous collision detection. Keep
 time steps and movement small; substeps are capped at 128 per call.
 

@@ -30,11 +30,12 @@ void captureMouse(HWND window, WindowState& state, bool capture) {
         GetClientRect(window, &bounds);
         if (bounds.right <= 0 || bounds.bottom <= 0) capture = false;
         else {
-            POINT corners[2]{{bounds.left, bounds.top}, {bounds.right, bounds.bottom}};
-            ClientToScreen(window, &corners[0]);
-            ClientToScreen(window, &corners[1]);
-            bounds = {corners[0].x, corners[0].y, corners[1].x, corners[1].y};
-            ClipCursor(&bounds);
+            // Raw input provides movement; the hidden system cursor stays away from borders.
+            POINT center{bounds.right / 2, bounds.bottom / 2};
+            ClientToScreen(window, &center);
+            bounds = {center.x, center.y, center.x + 1, center.y + 1};
+            capture = ClipCursor(&bounds) != FALSE;
+            if (capture && GetCapture() != window) SetCapture(window);
         }
     }
     if (capture == state.mouseCaptured) return;
@@ -45,6 +46,7 @@ void captureMouse(HWND window, WindowState& state, bool capture) {
         do { ++state.cursorHideCalls; } while (ShowCursor(FALSE) >= 0);
     } else {
         ClipCursor(nullptr);
+        if (GetCapture() == window) ReleaseCapture();
         while (state.cursorHideCalls > 0) { ShowCursor(TRUE); --state.cursorHideCalls; }
     }
 }
@@ -132,6 +134,16 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
     }
     if (!state) return DefWindowProcW(window, message, wparam, lparam);
     switch (message) {
+    case WM_NCHITTEST:
+        if (state->mouseCaptured) return HTCLIENT;
+        return DefWindowProcW(window, message, wparam, lparam);
+    case WM_SETCURSOR:
+        if (state->mouseCaptured) { SetCursor(nullptr); return TRUE; }
+        return DefWindowProcW(window, message, wparam, lparam);
+    case WM_NCLBUTTONDOWN: case WM_NCLBUTTONDBLCLK:
+    case WM_NCRBUTTONDOWN: case WM_NCRBUTTONDBLCLK:
+        if (state->mouseCaptured) return 0;
+        return DefWindowProcW(window, message, wparam, lparam);
     case WM_PAINT: {
         PAINTSTRUCT paint{};
         HDC dc = BeginPaint(window, &paint);
@@ -172,7 +184,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
         SetCapture(window); // Continue receiving button releases during a drag.
         return message == WM_XBUTTONDOWN ? TRUE : 0;
     case WM_LBUTTONUP: case WM_RBUTTONUP: case WM_MBUTTONUP: case WM_XBUTTONUP:
-        if (!(wparam & (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON | MK_XBUTTON1 | MK_XBUTTON2))) ReleaseCapture();
+        if (!state->mouseCaptured && !(wparam & (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON | MK_XBUTTON1 | MK_XBUTTON2))) ReleaseCapture();
         return message == WM_XBUTTONUP ? TRUE : 0;
     case WM_ENTERMENULOOP:
         captureMouse(window, *state, false);

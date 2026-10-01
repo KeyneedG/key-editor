@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <string>
 #include <utility>
@@ -20,7 +21,7 @@ struct Color {
 };
 
 struct Mesh {
-    std::vector<Vec3> vertices;
+    std::vector<Vector3> vertices;
     // Counterclockwise winding when viewed from outside the surface.
     std::vector<std::array<std::size_t, 3>> triangles;
 };
@@ -54,6 +55,46 @@ struct Entity {
     bool visible = true;
     std::vector<std::unique_ptr<Component>> components;
 
+    Entity() = default;
+    Entity(const Entity&) = delete;
+    Entity& operator=(const Entity&) = delete;
+    Entity(Entity&&) noexcept = default;
+    Entity& operator=(Entity&& entity) noexcept {
+        if (this == &entity) return *this;
+        transform = entity.transform;
+        visible = entity.visible;
+        components = std::move(entity.components);
+        parent_ = entity.parent_;
+        transform.parent_ = parent_ ? &parent_->transform : nullptr;
+        return *this;
+    }
+
+    Entity* parent() const { return parent_; }
+    // By default, preserve world position, rotation, and scale magnitudes.
+    void setParent(Entity* parent, bool worldPositionStays = true) {
+        if (parent == parent_) return;
+        for (const Entity* ancestor = parent; ancestor; ancestor = ancestor->parent_) {
+            if (ancestor == this) throw std::invalid_argument("Entity parenting cannot form a cycle");
+        }
+        const Vector3 position = transform.position(), scale = transform.lossyScale();
+        const Quaternion rotation = transform.rotation();
+        if (worldPositionStays && parent) {
+            parent->transform.inversePoint(position); // Validate before changing the hierarchy.
+        }
+        parent_ = parent;
+        transform.parent_ = parent ? &parent->transform : nullptr;
+        if (worldPositionStays) {
+            transform.setPosition(position);
+            transform.setRotation(rotation);
+            const auto axisScale = [&](Vector3 axis) {
+                axis = rotate(axis, transform.localRotation);
+                return parent ? length(parent->transform.vector(axis)) : length(axis);
+            };
+            transform.localScale = {scale.x / axisScale({1, 0, 0}),
+                scale.y / axisScale({0, 1, 0}), scale.z / axisScale({0, 0, 1})};
+        }
+    }
+
     template<class T, class... Args>
     T& addComponent(Args&&... args) {
         auto component = std::make_unique<T>(std::forward<Args>(args)...);
@@ -77,10 +118,14 @@ struct Entity {
         }
         return nullptr;
     }
+
+private:
+    Entity* parent_ = nullptr;
 };
 
 struct Scene {
-    std::vector<Entity> entities;
+    // Appending entities does not invalidate parent pointers or entity references.
+    std::deque<Entity> entities;
 };
 
 class Renderer {
