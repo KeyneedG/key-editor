@@ -13,8 +13,43 @@
 
 namespace tiny3d {
 namespace {
+struct BackBuffer {
+    HDC dc = nullptr;
+    HBITMAP bitmap = nullptr;
+    HGDIOBJ originalBitmap = nullptr;
+    int width = 0, height = 0;
+
+    BackBuffer() = default;
+    BackBuffer(const BackBuffer&) = delete;
+    BackBuffer& operator=(const BackBuffer&) = delete;
+    ~BackBuffer() {
+        if (bitmap) {
+            SelectObject(dc, originalBitmap);
+            DeleteObject(bitmap);
+        }
+        if (dc) DeleteDC(dc);
+    }
+
+    bool resize(HDC target, int newWidth, int newHeight) {
+        if (!dc) dc = CreateCompatibleDC(target);
+        if (!dc) return false;
+        if (width == newWidth && height == newHeight) return true;
+        HBITMAP next = CreateCompatibleBitmap(target, newWidth, newHeight);
+        if (!next) return false;
+        HGDIOBJ previous = SelectObject(dc, next);
+        if (!previous || previous == HGDI_ERROR) { DeleteObject(next); return false; }
+        if (bitmap) DeleteObject(bitmap);
+        else originalBitmap = previous;
+        bitmap = next;
+        width = newWidth;
+        height = newHeight;
+        return true;
+    }
+};
+
 struct WindowState {
     Renderer& renderer;
+    BackBuffer backBuffer;
     Input input;
     bool running = true;
     bool mouseCaptured = false;
@@ -148,22 +183,26 @@ void mouseEvent(WindowState& state, const RAWMOUSE& mouse) {
     if (mouse.usButtonFlags & RI_MOUSE_HWHEEL) input.mouseWheelHorizontal += wheel;
 }
 
-void present(HWND window, HDC dc, const Renderer& renderer) {
+void present(HWND window, HDC dc, const Renderer& renderer, BackBuffer& buffer) {
     RECT client{};
     GetClientRect(window, &client);
-    FillRect(dc, &client, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+    if (client.right <= 0 || client.bottom <= 0 || !buffer.resize(dc, client.right, client.bottom)) return;
+    // Compose the frame and letterbox bars offscreen so the window never shows the clear.
+    if (!FillRect(buffer.dc, &client, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)))) return;
     const Viewport viewport = fitViewport(client.right, client.bottom, renderer.width(), renderer.height());
-    if (viewport.width <= 0 || viewport.height <= 0) return;
-    BITMAPINFO bitmap{};
-    bitmap.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bitmap.bmiHeader.biWidth = renderer.width();
-    bitmap.bmiHeader.biHeight = -renderer.height(); // Top row first.
-    bitmap.bmiHeader.biPlanes = 1;
-    bitmap.bmiHeader.biBitCount = 32;
-    bitmap.bmiHeader.biCompression = BI_RGB;
-    StretchDIBits(dc, viewport.x, viewport.y, viewport.width, viewport.height,
-                 0, 0, renderer.width(), renderer.height(), renderer.pixels().data(),
-                 &bitmap, DIB_RGB_COLORS, SRCCOPY);
+    if (viewport.width > 0 && viewport.height > 0) {
+        BITMAPINFO bitmap{};
+        bitmap.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bitmap.bmiHeader.biWidth = renderer.width();
+        bitmap.bmiHeader.biHeight = -renderer.height(); // Top row first.
+        bitmap.bmiHeader.biPlanes = 1;
+        bitmap.bmiHeader.biBitCount = 32;
+        bitmap.bmiHeader.biCompression = BI_RGB;
+        const int result = StretchDIBits(buffer.dc, viewport.x, viewport.y, viewport.width, viewport.height,
+            0, 0, renderer.width(), renderer.height(), renderer.pixels().data(), &bitmap, DIB_RGB_COLORS, SRCCOPY);
+        if (!result || result == static_cast<int>(GDI_ERROR)) return;
+    }
+    BitBlt(dc, 0, 0, client.right, client.bottom, buffer.dc, 0, 0, SRCCOPY);
 }
 
 LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -188,7 +227,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
     case WM_PAINT: {
         PAINTSTRUCT paint{};
         HDC dc = BeginPaint(window, &paint);
-        present(window, dc, state->renderer);
+        present(window, dc, state->renderer, state->backBuffer);
         EndPaint(window, &paint);
         return 0;
     }
@@ -284,6 +323,7 @@ int run(Game& game, int width, int height, unsigned frameLimit) {
     window.rawMouse = true;
     ScreenState screen;
     applyScreenSettings(window.value, renderer, screen, game.screenSettings());
+    renderer.render(game.scene()); // The first paint must also have a complete frame.
     ShowWindow(window.value, SW_SHOW);
 
     constexpr std::array<int, 5> mouseButtons{VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2};

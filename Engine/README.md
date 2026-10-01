@@ -147,6 +147,9 @@ Entities own their components through `unique_ptr`; move them into the scene
 with `std::move` rather than copying. Mesh data can be shared by multiple
 `MeshRenderer` components. Entity transforms scale, rotate, then translate.
 The engine updates the game and calls `Renderer::render(scene)` every frame.
+The Windows backend composes the frame and letterbox bars in a reusable offscreen
+bitmap, then copies the complete result to the window in one operation. This avoids
+flashing the black background between frames.
 Update your custom component behavior from `Game::update`. Input exposes
 `held`, `pressed`, and `released` for both keyboard keys and mouse buttons.
 
