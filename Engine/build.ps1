@@ -2,6 +2,7 @@
 param(
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Debug',
     [string]$ConfigFile = (Join-Path $PSScriptRoot 'engine.json'),
+    [string]$ToolchainDirectory = 'C:\msys64\ucrt64',
     [switch]$Rebuild,
     [switch]$Clean,
     [switch]$NoLaunch
@@ -10,38 +11,25 @@ param(
 $ErrorActionPreference = 'Stop'
 try {
     $engineDirectory = $PSScriptRoot
-    $buildDirectory = Join-Path $PSScriptRoot "build\$Configuration"
+    $buildDirectory = Join-Path $PSScriptRoot "build\GCC\$Configuration"
     $configPath = (Resolve-Path -LiteralPath $ConfigFile).Path
+    $toolchainPath = (Resolve-Path -LiteralPath $ToolchainDirectory).Path
+    $toolchainBin = Join-Path $toolchainPath 'bin'
+    $compiler = Join-Path $toolchainBin 'g++.exe'
+    $cmake = Join-Path $toolchainBin 'cmake.exe'
+    $ninja = Join-Path $toolchainBin 'ninja.exe'
+    foreach ($tool in @($compiler, $cmake, $ninja)) {
+        if (-not (Test-Path -LiteralPath $tool)) {
+            throw "Missing tool: $tool. Install the MSYS2 UCRT64 GCC, CMake, and Ninja packages."
+        }
+    }
 
-    # Some shells expose both Path and PATH. Normalize before invoking VS tools.
-    $taskBuildPath = $env:PATH
+    # Change only this build process's environment, preserving other consoles.
+    # Some parent shells expose both Path and PATH; normalize before launching tools.
+    $taskBuildPath = "$toolchainBin;$env:PATH"
     Remove-Item Env:PATH -ErrorAction SilentlyContinue
     Remove-Item Env:Path -ErrorAction SilentlyContinue
     $env:Path = $taskBuildPath
-
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    if (-not (Test-Path -LiteralPath $vswhere)) {
-        throw 'Install Visual Studio 2022 with Desktop development with C++.'
-    }
-    $installation = & $vswhere -latest -version '[17.0,18.0)' -products '*' `
-        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-    if ($LASTEXITCODE -ne 0 -or -not $installation) {
-        throw 'Visual Studio 2022 C++ tools were not found.'
-    }
-    $developerCommand = Join-Path $installation 'Common7\Tools\VsDevCmd.bat'
-    $environmentLines = & $env:ComSpec /d /s /c `
-        ('"{0}" -no_logo -arch=x64 -host_arch=x64 >nul && set' -f $developerCommand)
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot initialize the Visual Studio C++ environment.' }
-    foreach ($line in $environmentLines) {
-        if ($line -match '^([^=]+)=(.*)$') {
-            [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
-        }
-    }
-    $cmake = Join-Path $installation 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
-    $ninja = Join-Path $installation 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe'
-    if (-not (Test-Path -LiteralPath $cmake) -or -not (Test-Path -LiteralPath $ninja)) {
-        throw 'Install the C++ CMake tools for Windows component in Visual Studio Installer.'
-    }
 
     if ($Clean) {
         if (Test-Path -LiteralPath (Join-Path $buildDirectory 'CMakeCache.txt')) {
@@ -52,13 +40,32 @@ try {
     }
     $autoStart = if ($NoLaunch) { 'OFF' } else { 'ON' }
     & $cmake -S $engineDirectory -B $buildDirectory -G Ninja `
+        "-DCMAKE_CXX_COMPILER=$compiler" `
         "-DCMAKE_MAKE_PROGRAM=$ninja" "-DCMAKE_BUILD_TYPE=$Configuration" `
         "-DTINY3D_CONFIG=$configPath" "-DTINY3D_AUTO_START=$autoStart"
-    if ($LASTEXITCODE -ne 0) { throw 'Configuration failed. Check the JSON settings and project manifest.' }
+    if ($LASTEXITCODE -ne 0) { throw 'Configuration failed. Check compiler reflection support, JSON settings, and the project manifest.' }
     $buildArguments = @('--build', $buildDirectory, '--parallel')
     if ($Rebuild) { $buildArguments += '--clean-first' }
     & $cmake @buildArguments
     if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+
+    # Visual Studio's built-in MIEngine can read GCC symbols through local GDB.
+    $gdb = Join-Path $toolchainBin 'gdb.exe'
+    $executable = Join-Path $buildDirectory 'tiny3d_project.exe'
+    $settings = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    if ($settings.project -and (Test-Path -LiteralPath $gdb) -and (Test-Path -LiteralPath $executable)) {
+        $debugDocument = New-Object System.Xml.XmlDocument
+        $debugOptions = $debugDocument.CreateElement('LocalLaunchOptions',
+            'http://schemas.microsoft.com/vstudio/MDDDebuggerOptions/2014')
+        $debugOptions.SetAttribute('MIDebuggerPath', $gdb)
+        $debugOptions.SetAttribute('ExePath', $executable)
+        $debugOptions.SetAttribute('WorkingDirectory', $engineDirectory)
+        $debugOptions.SetAttribute('TargetArchitecture', 'X64')
+        $debugOptions.SetAttribute('MIMode', 'gdb')
+        $debugOptions.SetAttribute('ExternalConsole', 'false')
+        $debugDocument.AppendChild($debugOptions) | Out-Null
+        $debugDocument.Save((Join-Path $buildDirectory 'gdb.xml'))
+    }
 } catch {
     Write-Error $_ -ErrorAction Continue
     exit 1

@@ -4,12 +4,13 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <typeinfo>
 #include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
 
-// Standalone C++17 interpreter. No engine, operating-system or Unity dependencies.
+// Standalone interpreter. No engine, operating-system or Unity dependencies.
 namespace eryscript {
 
 struct Object;
@@ -58,12 +59,22 @@ struct Callable {
 };
 
 struct Object {
+    struct Native {
+        virtual ~Native() = default;
+        virtual const void* address(const std::type_info& type) const = 0;
+        virtual void check() const = 0;
+        virtual const std::type_info& type() const { return typeid(*this); }
+        virtual bool equals(const Native& other) const { return this == &other; }
+        bool readOnly = false;
+        bool owned = false;
+    };
     struct Property {
         std::function<Value()> get;
         std::function<void(const Value&)> set; // Empty means read-only.
     };
     std::unordered_map<std::string, Value> fields;
     std::unordered_map<std::string, Property> properties;
+    std::shared_ptr<Native> native; // Optional C++ backing, used by reflection.hpp.
     Value get(const std::string& name) const;
     void set(const std::string& name, const Value& value);
     void property(std::string name, std::function<Value()> get,

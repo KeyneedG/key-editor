@@ -1,6 +1,7 @@
 #include "eryscript/eryscript.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <cmath>
@@ -8,6 +9,7 @@
 #include <iostream>
 #include <limits>
 #include <locale>
+#include <optional>
 #include <sstream>
 
 namespace eryscript {
@@ -154,6 +156,13 @@ std::vector<Token> tokenize(const std::string& source) {
     return tokens;
 }
 
+struct Symbols {
+    std::unordered_map<std::string, std::size_t> slots;
+    std::size_t slot(const std::string& name) {
+        return slots.try_emplace(name, slots.size()).first->second;
+    }
+};
+
 struct Expr;
 struct Statement;
 using Expression = std::shared_ptr<Expr>;
@@ -168,6 +177,8 @@ struct Expr {
     std::vector<std::vector<Expression>> dimensions;
     std::vector<std::string> typeNames;
     bool declaresVariable = false;
+    bool isThis = false;
+    std::size_t slot = 0;
     unsigned treeDepth = 1;
     Expr(Kind kind, std::size_t line) : kind(kind), line(line) {}
 };
@@ -187,13 +198,15 @@ struct Statement {
     std::string name;
     Expression expression, to;
     Statements body;
-    std::vector<std::string> parameters;
+    std::vector<std::size_t> parameters;
+    std::size_t slot = 0;
     std::vector<Branch> branches;
     Statement(Kind kind, std::size_t line) : kind(kind), line(line) {}
 };
 
 class Parser {
     std::vector<Token> tokens_;
+    Symbols& symbols_;
     std::size_t pos_ = 0;
     unsigned depth_ = 0;
     const Token& peek() const { return tokens_[pos_]; }
@@ -242,6 +255,8 @@ class Parser {
                         ++pos_; arg->declaresVariable = true;
                         arg->left = std::make_shared<Expr>(Expr::Name, peek().line);
                         arg->left->text = identifier();
+                        arg->left->slot = symbols_.slot(arg->left->text);
+                        arg->left->isThis = lower(arg->left->text) == "this";
                     } else arg->left = expression();
                     validateTree(arg); result.push_back(std::move(arg));
                 } else result.push_back(expression());
@@ -272,7 +287,10 @@ class Parser {
                         node->dimensions.push_back(std::move(lengths));
                     } while (take("["));
                 } else { expect("("); node->args = list(")", true); }
-            } else { node->kind = Expr::Name; node->text = token.text; }
+            } else {
+                node->kind = Expr::Name; node->text = token.text;
+                node->slot = symbols_.slot(token.text); node->isThis = keyword == "this";
+            }
         } else if (token.text == "+" || token.text == "-" || token.text == "!") {
             node->kind = Expr::Unary; node->text = token.text; node->left = expression(7);
         } else throw Error(token.line, "Expected an expression");
@@ -364,7 +382,7 @@ class Parser {
         } else if (word("method")) {
             ++pos_; node->kind = Statement::Method; node->name = identifier();
             if (take("(")) {
-                if (!is(")")) { do { node->parameters.push_back(identifier()); } while (take(",")); }
+                if (!is(")")) { do { node->parameters.push_back(symbols_.slot(identifier())); } while (take(",")); }
                 expect(")");
             }
             endLine(); node->body = block();
@@ -396,10 +414,11 @@ class Parser {
             node->kind = word("break") ? Statement::Break : Statement::Continue;
             ++pos_; endLine();
         } else { node->expression = expression(); endLine(); }
+        if (node->kind == Statement::Var || node->kind == Statement::For) node->slot = symbols_.slot(node->name);
         return node;
     }
 public:
-    explicit Parser(const std::string& source) : tokens_(tokenize(source)) {}
+    Parser(const std::string& source, Symbols& symbols) : tokens_(tokenize(source)), symbols_(symbols) {}
     Statements parse() {
         auto statements = block();
         if (peek().kind != TokenKind::End) throw Error(peek().line, "Unexpected block terminator: " + peek().text);
@@ -408,8 +427,38 @@ public:
 };
 
 struct Scope {
-    std::unordered_map<std::string, Value> variables;
+    // Names are numbered once at load time. An empty slot differs from a declared null.
+    std::vector<std::optional<Value>> variables;
+    std::vector<std::size_t> declared;
     Scope* parent = nullptr;
+    Value* find(std::size_t slot) {
+        return slot < variables.size() && variables[slot] ? &*variables[slot] : nullptr;
+    }
+    void set(std::size_t slot, Value value) {
+        if (slot >= variables.size()) variables.resize(slot + 1);
+        if (!variables[slot]) declared.push_back(slot);
+        variables[slot] = std::move(value);
+    }
+    void clear() {
+        for (auto slot : declared) variables[slot].reset();
+        declared.clear();
+    }
+};
+struct ScopeGuard {
+    Scope& scope;
+    explicit ScopeGuard(Scope& scope) : scope(scope) { scope.clear(); }
+    ~ScopeGuard() { scope.clear(); }
+};
+
+struct CallBuffer {
+    Arguments args;
+    std::vector<std::pair<std::size_t, std::function<void(Value)>>> setters;
+    void clear() { args.values.clear(); args.modes.clear(); args.typeNames.clear(); setters.clear(); }
+};
+struct CallGuard {
+    CallBuffer& buffer;
+    explicit CallGuard(CallBuffer& buffer) : buffer(buffer) { buffer.clear(); }
+    ~CallGuard() { buffer.clear(); } // Release native owners on success and on exceptions.
 };
 struct Location {
     std::function<Value()> get;
@@ -457,11 +506,13 @@ Value member(const Value& target, const std::string& name) {
 }
 
 struct State : std::enable_shared_from_this<State> {
+    Symbols symbols;
     Statements program;
     Scope globals;
     Value root;
     Spec spec;
     std::unordered_map<std::string, std::shared_ptr<Statement>> methods;
+    std::unordered_map<std::string, Value> methodValues;
     std::unordered_map<std::string, Function> constructors;
     std::vector<std::string> usings;
     bool stopped = false;
@@ -469,12 +520,15 @@ struct State : std::enable_shared_from_this<State> {
     unsigned callDepth = 0;
     unsigned expressionDepth = 0;
     unsigned blockDepth = 0;
+    // Each active expression gets its own buffer, including recursive calls/callbacks.
+    std::array<CallBuffer, 48> callBuffers;
+    std::array<Scope, 32> callScopes;
 
     void tick(std::size_t line) {
         if (stopped) throw Error(line, "Script is stopped");
         if (++steps > stepLimit) throw Error(line, "Script execution limit exceeded");
     }
-    Value resolve(const std::string& name, Scope& scope);
+    Value resolve(const std::string& name, std::size_t slot, Scope& scope);
     Location location(const Expression& expression, Scope& scope);
     Location indexed(const Expression& expression, Scope& scope);
     Value eval(const Expression& expression, Scope& scope);
@@ -483,12 +537,12 @@ struct State : std::enable_shared_from_this<State> {
     Value makeArray(const Expression& expression, Scope& scope, std::size_t dimension);
 };
 
-Value boundPath(const std::string& path, Scope& globals) {
+Value boundPath(const std::string& path, State& state) {
     const auto dot = path.find('.');
     const std::string first = path.substr(0, dot);
-    const auto it = globals.variables.find(first);
-    if (it == globals.variables.end()) throw std::runtime_error("Unknown name: " + first);
-    Value value = it->second;
+    const auto* bound = state.globals.find(state.symbols.slot(first));
+    if (!bound) throw std::runtime_error("Unknown name: " + first);
+    Value value = *bound;
     std::size_t start = dot;
     while (start != std::string::npos) {
         const auto end = path.find('.', start + 1);
@@ -497,36 +551,38 @@ Value boundPath(const std::string& path, Scope& globals) {
     }
     return value;
 }
-Value State::resolve(const std::string& name, Scope& scope) {
-    if (lower(name) == "this") return root;
+Value State::resolve(const std::string& name, std::size_t slot, Scope& scope) {
     for (Scope* current = &scope; current; current = current->parent) {
-        if (const auto it = current->variables.find(name); it != current->variables.end()) return it->second;
+        if (const auto* value = current->find(slot)) return *value;
     }
     if (methods.count(name)) {
+        if (const auto found = methodValues.find(name); found != methodValues.end()) return found->second;
         std::weak_ptr<State> weak = shared_from_this();
         Value result(Function([weak, name](Arguments& args) {
             const auto state = weak.lock();
             return state && !state->stopped && state->spec.enabled ? state->invoke(name, args) : Value{};
         }));
         result.callable()->scriptMethod = true;
+        methodValues.emplace(name, result);
         return result;
     }
     if (const auto* object = std::get_if<std::shared_ptr<Object>>(&root.data)) {
         if (*object && ((*object)->fields.count(name) || (*object)->properties.count(name))) return (*object)->get(name);
     }
     for (const auto& ns : usings) {
-        try { return boundPath(ns + "." + name, globals); } catch (const std::runtime_error&) {}
+        try { return boundPath(ns + "." + name, *this); } catch (const std::runtime_error&) {}
     }
     throw std::runtime_error("Unknown name: " + name);
 }
 Location State::location(const Expression& expression, Scope& scope) {
     if (expression->kind == Expr::Name) {
         const std::string name = expression->text;
-        if (lower(name) == "this") throw std::runtime_error("Cannot assign this");
+        if (expression->isThis) throw std::runtime_error("Cannot assign this");
+        const auto slot = expression->slot;
         for (Scope* current = &scope; current; current = current->parent) {
-            if (current->variables.count(name)) return {
-                [current, name] { return current->variables.at(name); },
-                [current, name](Value value) { current->variables.at(name) = std::move(value); }};
+            if (current->find(slot)) return {
+                [current, slot] { return *current->find(slot); },
+                [current, slot](Value value) { *current->find(slot) = std::move(value); }};
         }
         if (const auto* object = std::get_if<std::shared_ptr<Object>>(&root.data)) {
             if (*object && ((*object)->fields.count(name) || (*object)->properties.count(name))) return {
@@ -630,7 +686,7 @@ Value State::eval(const Expression& expression, Scope& scope) {
     try {
         switch (expression->kind) {
         case Expr::Literal: return expression->literal;
-        case Expr::Name: return resolve(expression->text, scope);
+        case Expr::Name: return expression->isThis ? root : resolve(expression->text, expression->slot, scope);
         case Expr::Member: return member(eval(expression->left, scope), expression->text);
         case Expr::Index: return indexed(expression, scope).get();
         case Expr::Assign: {
@@ -649,11 +705,19 @@ Value State::eval(const Expression& expression, Scope& scope) {
             if (op == "&&") return left.boolean() && eval(expression->right, scope).boolean();
             if (op == "||") return left.boolean() || eval(expression->right, scope).boolean();
             const Value right = eval(expression->right, scope);
-            if (op == "==" || op == "!=") return (left.data == right.data) == (op == "==");
+            if (op == "==" || op == "!=") {
+                bool equal = left.data == right.data;
+                const auto a = std::get_if<std::shared_ptr<Object>>(&left.data);
+                const auto b = std::get_if<std::shared_ptr<Object>>(&right.data);
+                if (a && *a && (*a)->native && b && *b && (*b)->native) equal = (*a)->native->equals(*(*b)->native);
+                return equal == (op == "==");
+            }
             if (op == "+" && (std::holds_alternative<std::string>(left.data) || std::holds_alternative<std::string>(right.data))) return left.string() + right.string();
             const double a = left.number(), b = right.number();
-            if (op == "<") return a < b; if (op == ">") return a > b;
-            if (op == "<=") return a <= b; if (op == ">=") return a >= b;
+            if (op == "<") return a < b;
+            if (op == ">") return a > b;
+            if (op == "<=") return a <= b;
+            if (op == ">=") return a >= b;
             if ((op == "/" || op == "%") && b == 0) throw std::runtime_error("Division by zero");
             const double result = op == "+" ? a + b : op == "-" ? a - b : op == "*" ? a * b : op == "/" ? a / b : std::fmod(a, b);
             if (!std::isfinite(result)) throw std::runtime_error("Arithmetic result is not finite");
@@ -661,34 +725,40 @@ Value State::eval(const Expression& expression, Scope& scope) {
         }
         case Expr::Call: {
             const auto callable = eval(expression->left, scope).callable();
-            Arguments args;
+            CallGuard call{callBuffers[expressionDepth - 1]};
+            auto& args = call.buffer.args;
             args.typeNames = expression->typeNames;
-            std::vector<std::function<void(Value)>> setters;
+            args.values.reserve(expression->args.size());
+            args.modes.reserve(expression->args.size());
             for (const auto& argument : expression->args) {
                 ArgumentMode mode = ArgumentMode::Value;
                 std::function<void(Value)> setter;
                 Value value;
                 if (argument->kind == Expr::ByRef) {
                     mode = argument->text == "ref" ? ArgumentMode::Ref : argument->text == "out" ? ArgumentMode::Out : ArgumentMode::In;
-                    if (argument->declaresVariable) scope.variables[argument->left->text] = {};
+                    if (argument->declaresVariable) scope.set(argument->left->slot, {});
                     if (mode == ArgumentMode::Ref || mode == ArgumentMode::Out) {
                         Location target = location(argument->left, scope); setter = target.set;
                         if (mode == ArgumentMode::Ref) value = target.get();
                     } else value = eval(argument->left, scope);
                 } else value = eval(argument, scope);
-                args.values.push_back(std::move(value)); args.modes.push_back(mode); setters.push_back(std::move(setter));
+                if (setter) call.buffer.setters.emplace_back(args.values.size(), std::move(setter));
+                args.values.push_back(std::move(value)); args.modes.push_back(mode);
             }
             if (callable->scriptMethod && (!args.typeNames.empty() || std::any_of(args.modes.begin(), args.modes.end(),
                 [](ArgumentMode mode) { return mode != ArgumentMode::Value; }))) throw std::runtime_error("Generic/ref/out/in arguments require a native binding");
             const auto result = callable->function(args);
-            if (args.values.size() != setters.size()) throw std::runtime_error("Native binding changed the argument count");
-            for (std::size_t i = 0; i < setters.size(); ++i) if (setters[i]) setters[i](args.values[i]);
+            if (args.values.size() != expression->args.size()) throw std::runtime_error("Native binding changed the argument count");
+            for (const auto& [index, setter] : call.buffer.setters) setter(args.values[index]);
             return result;
         }
         case Expr::New: {
             if (!expression->dimensions.empty()) return makeArray(expression, scope, 0);
             std::string type = expression->text;
-            Arguments args;
+            CallGuard call{callBuffers[expressionDepth - 1]};
+            auto& args = call.buffer.args;
+            args.values.reserve(expression->args.size());
+            args.modes.reserve(expression->args.size());
             const auto generic = type.find('<');
             if (generic != std::string::npos) {
                 unsigned depth = 0; std::size_t start = generic + 1;
@@ -725,7 +795,7 @@ Flow State::execute(const Statements& statements, Scope& scope, unsigned loopDep
         try {
             switch (statement->kind) {
             case Statement::ExpressionStmt: eval(statement->expression, scope); break;
-            case Statement::Var: scope.variables[statement->name] = eval(statement->expression, scope); break;
+            case Statement::Var: scope.set(statement->slot, eval(statement->expression, scope)); break;
             case Statement::Method: methods[statement->name] = statement; break;
             case Statement::Using: usings.push_back(statement->name); break;
             case Statement::Specify: break; // Applied before executing the top-level body.
@@ -747,9 +817,10 @@ Flow State::execute(const Statements& statements, Scope& scope, unsigned loopDep
                 if (!std::isfinite(from) || !std::isfinite(to) || std::abs(from) > 9007199254740991.0 || std::abs(to) > 9007199254740991.0) {
                     throw Error(statement->line, "For range is not a finite, exactly representable integer range");
                 }
+                Scope iteration; iteration.parent = &scope;
                 for (double i = std::round(from); i <= std::round(to); ++i) {
                     tick(statement->line);
-                    Scope iteration; iteration.parent = &scope; iteration.variables[statement->name] = i;
+                    iteration.clear(); iteration.set(statement->slot, i);
                     const Flow flow = execute(statement->body, iteration, loopDepth + 1);
                     if (flow.kind == Flow::Return) return flow;
                     if (flow.kind == Flow::Break) break;
@@ -772,8 +843,9 @@ Value State::invoke(const std::string& name, Arguments& args) {
     if (callDepth >= 32) throw Error(method->line, "Method recursion limit exceeded");
     if (!callDepth) { steps = 0; allocatedElements = 0; }
     struct Guard { unsigned& depth; explicit Guard(unsigned& depth) : depth(depth) { ++depth; } ~Guard() { --depth; } } guard(callDepth);
-    Scope local; local.parent = &globals;
-    for (std::size_t i = 0; i < args.values.size(); ++i) local.variables[method->parameters[i]] = args.values[i];
+    ScopeGuard frame{callScopes[callDepth - 1]};
+    Scope& local = frame.scope; local.parent = &globals;
+    for (std::size_t i = 0; i < args.values.size(); ++i) local.set(method->parameters[i], args.values[i]);
     const Flow flow = execute(method->body, local);
     return flow.kind == Flow::Return ? flow.value : Value{};
 }
@@ -863,7 +935,7 @@ Runtime& Runtime::operator=(Runtime&& other) noexcept {
     return *this;
 }
 void Runtime::bind(std::string name, Value value) {
-    impl_->bindings[name] = value; impl_->state->globals.variables[std::move(name)] = std::move(value);
+    impl_->bindings[name] = value; impl_->state->globals.set(impl_->state->symbols.slot(name), std::move(value));
 }
 void Runtime::constructor(std::string name, Function function) {
     impl_->constructors[name] = function; impl_->state->constructors[std::move(name)] = std::move(function);
@@ -876,8 +948,9 @@ void Runtime::load(const std::string& source, Value root) {
     stop();
     impl_->state = state; impl_->source = source;
     try {
-        state->program = Parser(source).parse();
-        state->root = std::move(root); state->globals.variables = impl_->bindings;
+        state->program = Parser(source, state->symbols).parse();
+        state->root = std::move(root);
+        for (const auto& [name, value] : impl_->bindings) state->globals.set(state->symbols.slot(name), value);
         state->constructors = impl_->constructors; state->stepLimit = stepLimit;
         applySpec(*state);
         state->callDepth = 1;
@@ -893,10 +966,14 @@ Value Runtime::call(const std::string& name, std::vector<Value> values) {
     Arguments args; args.modes.resize(values.size(), ArgumentMode::Value); args.values = std::move(values);
     return impl_->state->invoke(name, args);
 }
-Value Runtime::get(const std::string& name) const { return impl_->state->resolve(name, impl_->state->globals); }
+Value Runtime::get(const std::string& name) const {
+    auto& state = *impl_->state;
+    return lower(name) == "this" ? state.root : state.resolve(name, state.symbols.slot(name), state.globals);
+}
 void Runtime::set(const std::string& name, Value value) {
-    if (!impl_->state->globals.variables.count(name)) throw std::runtime_error("Undefined variable: " + name);
-    impl_->state->globals.variables.at(name) = std::move(value);
+    auto* target = impl_->state->globals.find(impl_->state->symbols.slot(name));
+    if (!target) throw std::runtime_error("Undefined variable: " + name);
+    *target = std::move(value);
 }
 void Runtime::stop() { impl_->state->stopped = true; }
 const Spec& Runtime::spec() const { return impl_->state->spec; }

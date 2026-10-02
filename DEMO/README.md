@@ -12,7 +12,8 @@ Open `Engine/Tiny3D.sln` in Visual Studio 2022 and set `Engine/engine.json` to:
 
 Choose **Debug | x64** or **Release | x64**, then press **Ctrl+Shift+B** to build
 and start the demo. Both `editor` and `game` modes work the same for now.
-Set `autoStart` to `false` when using **F5** to debug.
+The solution builds through GCC with C++26 reflection enabled. Use GDB for source
+debugging; setup and commands are in [Engine/README.md](../Engine/README.md).
 
 Collect the five gold cubes by walking near them. Use **WASD** to move,
 **the mouse** to look, **R** to reset, and **Escape** to open the pause menu. Progress appears
@@ -46,3 +47,7 @@ so the demo needs no image or font assets.
 The entire `DEMO` folder is optional. After deleting it, select your own project
 or set `project` to `""` to build only the engine library. Build and API
 instructions are in [Engine/README.md](../Engine/README.md).
+
+The collectibles use reflected engine APIs and a directly reflected `std::sin`
+overload. See [EryScriptExamples.md](EryScriptExamples.md) for script names,
+project namespace discovery and the optional `ReflectionChecks.cpp` checks.

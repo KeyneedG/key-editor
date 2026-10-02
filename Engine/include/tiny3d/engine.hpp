@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <concepts>
 #include <deque>
 #include <memory>
 #include <string>
@@ -23,9 +24,9 @@ struct Color {
 };
 
 struct Mesh {
-    std::vector<Vector3> vertices;
+    std::vector<Vector3> vertices{};
     // Counterclockwise winding when viewed from outside the surface.
-    std::vector<std::array<std::size_t, 3>> triangles;
+    std::vector<std::array<std::size_t, 3>> triangles{};
 };
 
 Mesh cube();   // Unit cube, centered at the origin.
@@ -132,6 +133,7 @@ struct Entity {
     }
 
     template<class T, class... Args>
+        requires std::derived_from<T, Component> && std::constructible_from<T, Args...>
     T& addComponent(Args&&... args) {
         auto component = std::make_unique<T>(std::forward<Args>(args)...);
         T& result = *component;
@@ -140,6 +142,7 @@ struct Entity {
     }
 
     template<class T>
+        requires std::derived_from<T, Component>
     T* getComponent() {
         for (auto& component : components) {
             if (auto* found = dynamic_cast<T*>(component.get())) return found;
@@ -148,6 +151,7 @@ struct Entity {
     }
 
     template<class T>
+        requires std::derived_from<T, Component>
     const T* getComponent() const {
         for (const auto& component : components) {
             if (auto* found = dynamic_cast<const T*>(component.get())) return found;
@@ -253,14 +257,14 @@ struct Input {
     float mouseDeltaX = 0, mouseDeltaY = 0; // Raw movement accumulated this frame.
     float mouseWheel = 0, mouseWheelHorizontal = 0; // Wheel steps accumulated this frame.
 
-    bool held(Key key) const { return keys[static_cast<std::size_t>(key)].down; }
-    bool pressed(Key key) const { return keys[static_cast<std::size_t>(key)].pressed; }
-    bool released(Key key) const { return keys[static_cast<std::size_t>(key)].released; }
-    bool held(MouseButton button) const { return mouseButtons[static_cast<std::size_t>(button)].down; }
-    bool pressed(MouseButton button) const { return mouseButtons[static_cast<std::size_t>(button)].pressed; }
-    bool released(MouseButton button) const { return mouseButtons[static_cast<std::size_t>(button)].released; }
-    void set(Key key, bool value) { keys[static_cast<std::size_t>(key)].set(value); }
-    void set(MouseButton button, bool value) { mouseButtons[static_cast<std::size_t>(button)].set(value); }
+    bool held(Key key) const { return state(keys, key).down; }
+    bool pressed(Key key) const { return state(keys, key).pressed; }
+    bool released(Key key) const { return state(keys, key).released; }
+    bool held(MouseButton button) const { return state(mouseButtons, button).down; }
+    bool pressed(MouseButton button) const { return state(mouseButtons, button).pressed; }
+    bool released(MouseButton button) const { return state(mouseButtons, button).released; }
+    void set(Key key, bool value) { const auto i = static_cast<std::size_t>(key); if (i < keys.size()) keys[i].set(value); }
+    void set(MouseButton button, bool value) { const auto i = static_cast<std::size_t>(button); if (i < mouseButtons.size()) mouseButtons[i].set(value); }
 
     // Platform backends reset edges and deltas, then collect events for the new frame.
     void beginFrame() {
@@ -273,6 +277,13 @@ struct Input {
         for (auto& button : mouseButtons) { button.pressed = false; button.set(false); }
         mouseDeltaX = mouseDeltaY = mouseWheel = mouseWheelHorizontal = 0;
         focused = false;
+    }
+
+private:
+    template<class E, std::size_t N>
+    static ButtonState state(const std::array<ButtonState, N>& states, E key) {
+        const auto i = static_cast<std::size_t>(key);
+        return i < N ? states[i] : ButtonState{};
     }
 };
 

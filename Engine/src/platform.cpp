@@ -9,7 +9,9 @@
 
 #if defined(_WIN32) && !defined(TINY3D_HEADLESS)
 #define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 
 namespace tiny3d {
@@ -57,6 +59,8 @@ struct WindowState {
     int cursorHideCalls = 0;
     bool hasAbsoluteMousePosition = false;
     POINT absoluteMousePosition{};
+
+    explicit WindowState(Renderer& source) : renderer(source) {}
 };
 
 struct ScreenState {

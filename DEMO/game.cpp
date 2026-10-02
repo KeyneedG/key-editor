@@ -2,6 +2,7 @@
 #include "tiny3d/physics.hpp"
 #include "tiny3d/ui.hpp"
 #include "tiny3d/eryscript.hpp"
+#include "eryscript/reflection.hpp"
 
 #include <algorithm>
 
@@ -219,23 +220,25 @@ private:
             item.transform.localPosition = position;
             item.transform.localScale = {.65f, .65f, .65f};
             item.addComponent<MeshRenderer>(box, Color{255, 195, 60});
-            item.addComponent<EryScript>(R"ery(
-using Tiny3D
+            auto& script = item.addComponent<EryScript>(R"ery(
+using tiny3d
 specify name = "Floating collectible"
 var age = 0
 
 method Awake
-    transform.localRotation = Quaternion.FromEuler(0.3, 0, 0.15)
+    entity.transform.localRotation = Quaternion.fromEuler(new Vector3(0.3, 0, 0.15))
 mend
 
 method Update
-    age = age + Time.deltaTime
-    var position = transform.localPosition
-    position.y = 0.7 + 0.15 * Math.Sin(age * 2)
-    transform.localPosition = position
-    transform.localRotation = Quaternion.FromEuler(0.3, age, 0.15)
+    age = age + deltaTime
+    var position = entity.transform.localPosition
+    position.y = 0.7 + 0.15 * sin(age * 2)
+    entity.transform.localPosition = position
+    entity.transform.localRotation = Quaternion.fromEuler(new Vector3(0.3, age, 0.15))
 mend
 )ery");
+            constexpr auto sine = std::meta::reflect_function(*static_cast<double(*)(double)>(std::sin));
+            script.reflection().bindFunctions<sine>(script.runtime());
             collectibles_.push_back(scene_.entities.size());
             scene_.entities.push_back(std::move(item));
         }

@@ -1,150 +1,177 @@
 # EryScript examples
 
-The collectible animation in game.cpp is an actual EryScript component: Awake
-sets its initial rotation; Update advances a per-cube age and changes its height
-and rotation. The demo disables these components while paused or collected.
+The collectible animation in game.cpp runs real EryScript components. The
+engine API is discovered through C++26 reflection; the demo also exposes
+std::sin directly through reflection, without a conversion lambda.
 
 ## Attach a script
 
 ~~~cpp
 #include "tiny3d/eryscript.hpp"
 
-tiny3d::Entity& cube = scene.entities.emplace_back();
+auto& cube = scene.entities.emplace_back();
 cube.addComponent<tiny3d::MeshRenderer>(
     std::make_shared<tiny3d::Mesh>(tiny3d::cube()));
 auto& script = cube.addComponent<tiny3d::EryScript>();
-script.runOnAwake = true;
-script.runInUpdate = true;
 script.code = R"ery(
+using tiny3d
 var angle = 0
-
 method Awake
-    GetComponent<MeshRenderer>().color = new Color(255, 195, 60)
+    entity.getComponent<MeshRenderer>().color = new Color(255, 195, 60)
 mend
-
 method Update
-    angle = angle + Time.deltaTime
-    transform.localRotation = Quaternion.FromEuler(0, angle, 0)
+    angle = angle + deltaTime
+    entity.transform.localRotation = Quaternion.fromEuler(new Vector3(0, angle, 0))
 mend
 )ery";
 ~~~
 
-The native engine loop invokes these methods automatically. They take no
-parameters. Missing Awake or Update methods are simply skipped. All ordinary
-EryScript methods can be called from C++ after initialization:
-
-~~~cpp
-if (script.runtime().hasMethod("Reset"))
-    script.runtime().call("Reset");
-~~~
+The engine calls parameterless Awake once and Update each frame. The
+runOnAwake/runInUpdate flags default to true. Missing methods are skipped.
+Call other script methods through script.runtime().call("MethodName").
 
 ## Keyboard, mouse, and transforms
 
 ~~~text
+using tiny3d
 var yaw = 0
-
 method Update
-    var position = transform.localPosition
-    if Input.GetKey(Key.W)
-        position.z = position.z + 4 * Time.deltaTime
+    if input.held(Key.W)
+        entity.transform.localPosition.z = entity.transform.localPosition.z + 4 * deltaTime
     end
-    transform.localPosition = position
-
-    yaw = yaw + Input.mouseDeltaX * 0.0025
-    transform.localRotation = Quaternion.FromEuler(0, yaw, 0)
-
-    if Input.GetMouseButtonDown(MouseButton.Left)
-        Console.WriteLine("Click! Wheel: " + Input.mouseWheel)
+    yaw = yaw + input.mouseDeltaX * 0.0025
+    entity.transform.setRotation(Quaternion.fromEuler(new Vector3(0, yaw, 0)))
+    if input.pressed(MouseButton.Left)
+        Console.WriteLine("Click! Wheel: " + input.mouseWheel)
     end
 mend
 ~~~
 
-Vector3, Quaternion and Color values are snapshots: edit a variable and assign
-it back, as with position above. transform.localPosition.y = 2 edits a temporary
-snapshot and does not update the entity. Use a whole-value assignment.
-Quaternion.FromEuler uses radians. FromEulerDegrees and the Unity-compatible
-Euler alias use degrees. ToEuler and ToEulerDegrees return Vector3 objects.
-Color uses red/green/blue channels from 0 to 255, matching the engine.
+Use the actual C++ names and signatures. input.held/pressed/released overloads
+accept either Key or MouseButton constants; reflected constants select the
+correct overload. Input fields are read-only. mouseX/Y, mouseDeltaX/Y,
+mouseWheel, mouseWheelHorizontal and focused are discovered automatically.
 
-Input exposes all engine Key names, including LeftArrow and NumpadEnter. GetKey,
-GetKeyDown/GetKeyUp and GetMouseButton/Down/Up accept enum values or names such
-as "W" and "Left". mouseX/Y, mouseDeltaX/Y, mouseWheel, mouseWheelHorizontal and
-focused are properties. Mouse movement already describes this frame; multiply
-by sensitivity, without deltaTime.
+The script root exposes entity, input, deltaTime and time. Nested fields are
+live, so entity.transform.localPosition.y = 2 updates the entity directly.
+World transforms use position()/rotation()/lossyScale() and setPosition(...)/
+setRotation(...). Quaternion.fromEuler takes one Vector3 in radians;
+fromEulerDegrees takes degrees. toEuler()/toEulerDegrees() return Vector3.
+Color channels range from 0 to 255. C++ collections convert to array snapshots.
 
-## Arrays, loops, and methods
-
-~~~text
-var samples = new float[4]
-
-method Fill
-    for i = 0 to samples.Length - 1
-        samples[i] = i * 2
-    end
-mend
-
-method Total
-    var result = 0
-    for i = 0 to samples.Length - 1
-        if samples[i] == 0
-            continue
-        end
-        result = result + samples[i]
-    end
-    return result
-mend
-~~~
-
-After initialization, call Fill and then Total from C++; the latter returns 12:
-
-~~~cpp
-script.runtime().call("Fill");
-double total = script.runtime().call("Total").number();
-~~~
+The old aliases GetComponent, Time, Input, FromEuler and Tiny3D were removed.
+Use entity.getComponent<Camera>(), deltaTime, input and using tiny3d instead.
+Entity.parent(), childCount() and getChild(index) are ordinary reflected methods.
+Inherited Component.enabled and all public component fields are discovered too.
 
 ## Button callback
 
-Attach this code to an entity that already has an Image and Button in a Canvas:
-
 ~~~text
+using tiny3d
 var clicks = 0
-
 method Awake
-    GetComponent<Button>().onClick = Clicked
+    entity.getComponent<Button>().onClick = Clicked
 mend
-
 method Clicked
     clicks = clicks + 1
     Console.WriteLine("Clicks: " + clicks)
 mend
 ~~~
 
-Callbacks stop working after the script stops, reloads source, or is destroyed.
-Errors in script button callbacks are recorded by the owning component.
+Attach this to an entity with a Button and Image inside a Canvas. Callbacks
+become harmless when their script stops, reloads, restarts, or is destroyed.
+Callback errors are recorded in component.error() and stop that script.
 
-## Standalone C++ and your own bindings
+## Expose a project namespace
 
-This example uses only the EryScript library, with no Tiny3D includes:
+Declare normal C++ APIs; no field lists or conversion lambdas are needed:
 
 ~~~cpp
-#include "eryscript/eryscript.hpp"
-#include <iostream>
+#include "eryscript/reflection.hpp"
 
-eryscript::Runtime script;
-script.bind("Double", eryscript::Value(eryscript::Function(
-    [](eryscript::Arguments& args) {
-        args.requireCount(1);
-        return eryscript::Value(args.values[0].number() * 2);
-    })));
-script.load(R"ery(
-method Calculate(x)
-    return Double(x) + 1
-mend
-)ery");
-std::cout << script.call("Calculate", {10}).number(); // 21
+namespace Gameplay {
+struct Stats {
+    int health = 100;
+    void heal(int amount) { health += amount; }
+};
+inline double total(const std::vector<double>& values) {
+    double sum = 0;
+    for (double value : values) sum += value;
+    return sum;
+}
+}
+
+// Before the first engine frame:
+script.reflection().bindNamespace<^^Gameplay>(script.runtime());
 ~~~
 
-The same bind API is available through component.runtime() for exposing your
-own C++ behavior. Add bindings before the first engine frame if Awake needs them.
-The standalone library is in Engine/EryScript; the engine-specific bindings are
-in Engine/src/eryscript.cpp.
+~~~text
+using Gameplay
+var stats = new Stats()
+method Awake
+    stats.heal(10)
+    Console.WriteLine(stats.health)
+    var values = new double[2]
+    values[0] = 2
+    values[1] = 3
+    Console.WriteLine(total(values))
+mend
+~~~
+
+The output is 110 and 5. Adding another public Stats field or method makes it
+available after recompiling that call site. Include the API headers there:
+reflection sees declarations visible to that translation unit. Component
+getComponent<T>/addComponent<T> specializations are generated for component
+types visible in the namespace used to discover Entity.
+
+## Call the standard library directly
+
+~~~cpp
+#include "eryscript/reflection.hpp"
+#include <cmath>
+
+constexpr auto sine = std::meta::reflect_function(
+    *static_cast<double(*)(double)>(std::sin));
+script.reflection().bindFunctions<sine>(script.runtime());
+~~~
+
+The script can now call sin(angle). The C++ cast chooses the double overload;
+reflection discovers the function's name, parameters and return type. There
+is no hand-written native invocation or argument-conversion code. Select other
+compiled overloads or template specializations the same way. Reflection is
+compile-time API discovery, so scripts cannot instantiate arbitrary new C++
+templates while running.
+
+## Standalone use
+
+~~~cpp
+#include "eryscript/reflection.hpp"
+
+Gameplay::Stats stats;
+eryscript::Runtime runtime;
+eryscript::Reflection reflection;
+reflection.bindNamespace<^^Gameplay>(runtime);
+runtime.load("method Heal\n heal(5)\n return health\nmend", reflection.object(&stats));
+double health = runtime.call("Heal").number(); // 105
+~~~
+
+Keep the Reflection instance and host objects alive while their views are used.
+This code depends only on Engine/EryScript, not the engine or Unity.
+
+## Run the checks
+
+ReflectionChecks.cpp verifies a new host API without any engine binding edits,
+including constructors/default arguments, private-member protection, inheritance,
+live nested fields, enum overloads, standard-library calls, ref/out, callbacks,
+reload/restart, input and scene lifetime checks.
+
+After building the engine in Debug, run from the repository's MSYS2 UCRT64 terminal:
+
+~~~bash
+g++ -std=c++26 -freflection -Wall -Wextra -Wpedantic -I Engine/include -I Engine/EryScript/include DEMO/ReflectionChecks.cpp Engine/build/GCC/Debug/libtiny3d.a Engine/build/GCC/Debug/EryScript/liberyscript.a -static -luser32 -lgdi32 -o Engine/build/reflection-checks.exe
+Engine/build/reflection-checks.exe
+~~~
+
+It prints "Reflection checks passed"; one logged script error is deliberately
+triggered to verify callback error handling. The check source is optional and
+is not included in the playable project's source manifest.

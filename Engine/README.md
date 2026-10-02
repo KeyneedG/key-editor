@@ -1,6 +1,6 @@
 # Tiny3D
 
-A small, extensible C++17 3D engine with no external libraries. The software
+A small, extensible C++26 3D engine with no external libraries. The software
 renderer uses the standard library; the native window and input use Windows
 Win32/GDI. CMake reads JSON without a separate JSON library.
 
@@ -8,8 +8,9 @@ Win32/GDI. CMake reads JSON without a separate JSON library.
 Engine/
   include/tiny3d/    Public math, engine, physics, UI, and project API
   src/              Renderer, physics, UI, window/input loop, and project entry point
+  EryScript/        Standalone interpreter and generic C++26 reflection bridge
   Tiny3D.sln        Visual Studio editor solution
-  Tiny3D.vcxproj    Editor project, including C++17 IntelliSense settings
+  Tiny3D.vcxproj    Visual Studio project wrapping the GCC C++26 build
   engine.json       Selected project, mode, and automatic startup
   CMakeLists.txt    Engine library build
   project.cmake     Project manifest loading and executable build
@@ -20,16 +21,29 @@ DEMO/
   game.cpp          Playable sample
   project.json      Sample source manifest
   README.md         Sample instructions
+  EryScriptExamples.md  Script and reflection examples
+  ReflectionChecks.cpp  Optional reflection verification/example
 ```
 
 All engine files belong to `Engine`; all sample files belong to `DEMO`.
 You can delete `DEMO`. Select your own project or leave `project` empty to build
-only `tiny3d.lib`. Generated output stays in `Engine/build` and can be deleted.
+only `libtiny3d.a` and `liberyscript.a`. Generated output stays in `Engine/build`
+and can be deleted.
 
 ## Visual Studio 2022
 
-1. Install **Desktop development with C++**, the MSVC v143 toolset, a Windows SDK,
-   and **C++ CMake tools for Windows** through Visual Studio Installer.
+1. Keep **Desktop development with C++** and the v143 toolset installed for the
+   Visual Studio project system. Install MSYS2 in `C:\msys64`, update it, and run
+   this command in its **UCRT64** terminal:
+
+   ```bash
+   pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-gdb
+   ```
+
+   GCC 16 or newer is required. The build checks `<meta>` and actual reflection
+   expressions during configuration. GCC compiles every target with
+   `-std=c++26 -freflection`. The Windows executable statically links the GCC
+   runtime, so launching it does not depend on adding GCC to your Windows PATH.
 2. Open `Engine/Tiny3D.sln`. The solution wraps CMake/Ninja and owns all build
    dependencies; your game's folder needs no solution or project files.
 3. Edit `Engine/engine.json` to select a project:
@@ -48,9 +62,28 @@ only `tiny3d.lib`. Generated output stays in `Engine/build` and can be deleted.
    added later.
 4. Choose **Debug | x64** or **Release | x64** and press **Ctrl+Shift+B**.
    A successful build starts the selected project automatically. Close it before
-   rebuilding. The executable is `Engine/build/<configuration>/tiny3d_project.exe`.
-5. For debugging, set `autoStart` to `false` and press **F5**. Breakpoints work in
-   the engine and selected game.
+   rebuilding. The executable is
+   `Engine/build/GCC/<configuration>/tiny3d_project.exe`.
+5. GCC produces DWARF debug information. The build writes `gdb.xml` beside the
+   executable to configure Visual Studio's built-in MIEngine for local GDB.
+   After a Debug build, open **View > Other Windows > Command Window** and enter
+   this command, substituting your repository's absolute path:
+
+   ```text
+   Debug.MIDebugLaunch /Executable:Tiny3D /OptionsFile:"D:\Projects\Git\key-editor\Engine\build\GCC\Debug\gdb.xml"
+   ```
+
+   Set `autoStart` to `false` when debugging to avoid launching a separate game
+   during the build. This command uses the GDB engine; ordinary **F5** still uses
+   the solution's Windows native debugger, which cannot read GCC symbols.
+   You can also debug directly from PowerShell:
+
+   ```powershell
+   & C:\msys64\ucrt64\bin\gdb.exe Engine/build/GCC/Debug/tiny3d_project.exe
+   ```
+
+   Enter `break main`, then `run`. Visual Studio's **Ctrl+F5** can run the built
+   executable without debugging.
 
 Each build reads the settings and source manifest again. Rebuild after changing
 the selected project or mode. The executable uses your project's directory as
@@ -59,9 +92,18 @@ its working directory, so relative asset paths belong to your game.
 Engine sources and the demo's `game.cpp` appear together in Solution Explorer
 while `DEMO` exists. For your own source files, use **Add > Existing Item** on the
 editor project and save with **File > Save All**. This provides an editing context;
-`project.json` controls which files compile. The editor sets C++17 for both the
-compiler and IntelliSense. Reload the solution after moving it or changing its
+`project.json` controls which files compile. The editor uses its latest language
+mode for IntelliSense, while GCC performs the actual C++26 compilation. VS 2022's
+IntelliSense parser does not understand C++26 reflection yet; reflection code can
+compile successfully despite IntelliSense diagnostics. Use **Build Only** in the
+Error List to view compiler errors. Reload the solution after changing its
 project file outside Visual Studio.
+
+The default compiler tools are in `C:\msys64\ucrt64\bin`. For another MSYS2
+location, set the `Tiny3DToolchainDirectory` MSBuild property or pass
+`-ToolchainDirectory <installation>/ucrt64` to `build.ps1`. The build changes only
+its own process's PATH. Existing consoles and their environment stay untouched.
+Old MSVC output under `Engine/build/Debug` and `Release` is kept separate.
 
 See [the demo guide](../DEMO/README.md) to run the included sample.
 
@@ -77,7 +119,7 @@ From the repository directory, an ordinary PowerShell window can run:
 .\Engine\build.ps1 -Configuration Release -Clean
 ```
 
-The script locates Visual Studio and initializes its x64 compiler environment.
+The script locates GCC, CMake, and Ninja in the selected UCRT64 directory.
 If script execution is disabled:
 
 ```powershell
@@ -171,20 +213,39 @@ to return that scene directly. --render follows the same scripting lifecycle,
 with zero delta time. A custom loop can own Scripts and call awake(scene) once,
 then update(scene, seconds, input) each frame.
 
-The bindings expose this/entity/gameObject, transform, entity tag/layer/visible,
-parent/getChild/childCount, GetComponent<T>() or GetComponent("Type"), Vector3,
-Quaternion, Color, Time.deltaTime/time, keyboard/mouse Input, Key, MouseButton,
-and LayerMask(layer). Supported components include MeshRenderer, Camera,
-Rigidbody, box/sphere/capsule colliders, Canvas, Image, SimpleText, Button and EryScript.
-Vector, quaternion, and color properties return snapshots; assign the whole
-value back after editing it. Transform Euler angles and Quaternion.FromEuler
-use radians; FromEulerDegrees and Euler use degrees.
+C++26 reflection discovers the public types, fields, methods, constructors,
+enums and functions visible in the `tiny3d` namespace. There are no per-member
+engine binding tables. Scripts use the C++ names and signatures:
+`entity.getComponent<Camera>()`, `entity.getChild(0)`, `entity.parent()`,
+`entity.transform.position()`, `entity.transform.setPosition(value)`,
+`Quaternion.fromEuler(new Vector3(0, angle, 0))`, `input.held(Key.W)` and
+`layerMask(1)`. Start scripts with `using tiny3d` to use namespace members.
+
+The script root (`this`) provides `entity`, read-only `input`, `deltaTime` and
+`time`. Nested object fields are live: `entity.transform.localPosition.y = 2`
+updates the entity directly. World transforms use the C++ getter/setter methods.
+`Quaternion.fromEuler` uses radians; `fromEulerDegrees` uses degrees. C++ const
+objects are read-only. Collections convert to script arrays; these containers
+are snapshots, so replace a writable collection field to write it back.
+
+The former hand-written aliases (`Tiny3D`, `GetComponent`, `Time`, `Input`,
+`FromEuler`, etc.) have been removed. See the updated examples for migration.
+To expose project code, include `eryscript/reflection.hpp` and call
+`component.reflection().bindNamespace<^^YourNamespace>(component.runtime())`
+before its first frame. Existing compiled functions, including standard-library
+overloads, can be selected with `bindFunctions`; names and argument conversions
+are generated automatically. Reflection discovers declarations visible in the
+translation unit making that call, so include your API headers there.
 
 Keep scene entity slots stable while scripts refer to other entities, as with
 other raw entity pointers. Clearing and rebuilding a scene stops old script
 callbacks. Script errors are logged once, stored in component.error(), and stop
 that script while the game continues. Edit code or call restart() to retry.
-component.runtime() provides manual method calls and custom C++ bindings.
+component.runtime() provides explicit script method calls; component.reflection()
+provides additional API discovery. Native templates require compiled
+specializations; this bridge generates single-type member-template calls for
+types visible in the selected namespace (including component lookup/creation).
+It does not compile arbitrary new C++ templates while a script is running.
 Changed UI graphics are refreshed after scripting, without processing clicks twice.
 
 The standalone interpreter is in [EryScript](EryScript/README.md), without engine
@@ -432,11 +493,11 @@ memory for the current run; persistence is up to your game.
 
 ## Direct CMake build
 
-From **Developer PowerShell for VS 2022**:
+From **MSYS2 UCRT64**, in the repository directory:
 
-```powershell
-cmake -S Engine -B Engine/build/Release -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build Engine/build/Release
+```bash
+cmake -S Engine -B Engine/build/GCC/Release -G Ninja -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release
+cmake --build Engine/build/GCC/Release
 ```
 
 Without `TINY3D_CONFIG`, this builds the engine library only. To select a game,
@@ -447,7 +508,8 @@ Other CMake programs can use `add_subdirectory` with the `Engine` directory and
 link against `tiny3d`. An independent executable can provide its own `main()` and
 call `tiny3d::run(game)`.
 
-The core also builds on Linux and macOS with CMake 3.19+ and a C++17 compiler.
+The core can also build on Linux and macOS with CMake 3.25+ and a compiler that
+supports C++26 reflection, such as GCC 16+.
 Use `-DTINY3D_HEADLESS=ON` to omit the native window backend. The Visual Studio
 wrapper and automatic startup are Windows features.
 

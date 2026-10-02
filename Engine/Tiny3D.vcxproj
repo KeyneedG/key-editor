@@ -23,23 +23,24 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup>
-    <OutDir>$(ProjectDir)build\$(Configuration)\</OutDir>
-    <IntDir>$(ProjectDir)build\$(Configuration)\vs\</IntDir>
+    <OutDir>$(ProjectDir)build\GCC\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)build\GCC\$(Configuration)\vs\</IntDir>
     <Tiny3DConfigFile Condition="'$(Tiny3DConfigFile)' == ''">$(ProjectDir)engine.json</Tiny3DConfigFile>
-    <NMakeBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)build.ps1" -Configuration $(Configuration) -ConfigFile "$(Tiny3DConfigFile)"</NMakeBuildCommandLine>
-    <NMakeReBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)build.ps1" -Configuration $(Configuration) -ConfigFile "$(Tiny3DConfigFile)" -Rebuild</NMakeReBuildCommandLine>
-    <NMakeCleanCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)build.ps1" -Configuration $(Configuration) -ConfigFile "$(Tiny3DConfigFile)" -Clean</NMakeCleanCommandLine>
+    <Tiny3DToolchainDirectory Condition="'$(Tiny3DToolchainDirectory)' == ''">C:\msys64\ucrt64</Tiny3DToolchainDirectory>
+    <NMakeBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)build.ps1" -Configuration $(Configuration) -ConfigFile "$(Tiny3DConfigFile)" -ToolchainDirectory "$(Tiny3DToolchainDirectory)"</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)build.ps1" -Configuration $(Configuration) -ConfigFile "$(Tiny3DConfigFile)" -ToolchainDirectory "$(Tiny3DToolchainDirectory)" -Rebuild</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)build.ps1" -Configuration $(Configuration) -ConfigFile "$(Tiny3DConfigFile)" -ToolchainDirectory "$(Tiny3DToolchainDirectory)" -Clean</NMakeCleanCommandLine>
     <NMakeOutput>$(OutDir)tiny3d_project.exe</NMakeOutput>
     <NMakeIncludeSearchPath>$(ProjectDir)include;$(ProjectDir)EryScript\include;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
     <NMakePreprocessorDefinitions>_WIN32;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
-    <AdditionalOptions>/std:c++17 $(AdditionalOptions)</AdditionalOptions>
+    <AdditionalOptions>/std:c++latest $(AdditionalOptions)</AdditionalOptions>
     <LocalDebuggerCommand>$(OutDir)tiny3d_project.exe</LocalDebuggerCommand>
     <LocalDebuggerWorkingDirectory>$(ProjectDir)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
-      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -50,6 +51,7 @@
     <ClInclude Include="include\tiny3d\ui.hpp" />
     <ClInclude Include="include\tiny3d\eryscript.hpp" />
     <ClInclude Include="EryScript\include\eryscript\eryscript.hpp" />
+    <ClInclude Include="EryScript\include\eryscript\reflection.hpp" />
     <ClCompile Include="..\DEMO\game.cpp" Condition="Exists('$(ProjectDir)..\DEMO\game.cpp')" />
     <ClCompile Include="src\renderer.cpp" />
     <ClCompile Include="src\platform.cpp" />
@@ -67,6 +69,7 @@
     <None Include="EryScript\CMakeLists.txt" />
     <None Include="EryScript\README.md" />
     <None Include="..\DEMO\EryScriptExamples.md" Condition="Exists('$(ProjectDir)..\DEMO\EryScriptExamples.md')" />
+    <None Include="..\DEMO\ReflectionChecks.cpp" Condition="Exists('$(ProjectDir)..\DEMO\ReflectionChecks.cpp')" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

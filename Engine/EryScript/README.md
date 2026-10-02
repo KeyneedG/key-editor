@@ -1,4 +1,4 @@
-# EryScript for C++17
+# EryScript for C++26
 
 This directory is a standalone port of the language in EryScript.cs. It uses only
 the C++ standard library. Its header and source never include Tiny3D or Unity.
@@ -8,13 +8,17 @@ The Tiny3D component and bindings live outside this directory, in
 Build this directory directly with CMake, or add it with add_subdirectory and
 link your application against the eryscript target:
 
-~~~powershell
-cmake -S Engine/EryScript -B Engine/build/EryScript -G Ninja
-cmake --build Engine/build/EryScript
+~~~bash
+cmake -S Engine/EryScript -B Engine/build/GCC/EryScript -G Ninja -DCMAKE_CXX_COMPILER=g++
+cmake --build Engine/build/GCC/EryScript
 ~~~
 
-Run these commands from Developer PowerShell for VS 2022. A standalone build
+Run these commands from MSYS2 UCRT64 in the repository directory, using GCC 16+
+and CMake 3.25+. Configuration verifies C++26 reflection, and `-freflection`
+propagates to programs linking the `eryscript` CMake target. A standalone build
 produces a library; there is no dependency on the editor solution or a game.
+`include/eryscript/reflection.hpp` provides the automatic binding layer. It has
+no engine includes and can be used independently of Tiny3D.
 
 ## Language
 
@@ -51,6 +55,13 @@ Top-level variables persist between method calls. Method parameters and local
 variables do not. Assignment searches the current scope and then parent scopes.
 Script methods can be passed as callbacks.
 
+Variable names are mapped to numbered slots when a script loads. Call and loop
+storage is reused, with locals cleared between invocations and iterations.
+Reflection reuses views of stable nested members and filters native overloads
+by argument count and generic names. Value conversion, overload ambiguity,
+const protection and lifetime checks still run on every call; collections
+remain fresh array snapshots. The language syntax is unchanged.
+
 Console.WriteLine(value), Debug.Log(value), Math.Sin/Cos/Tan/Abs/Sqrt/Floor/
 Ceiling/Round/Min/Max/Clamp and Math.PI are built in. Mathf aliases Math.
 
@@ -70,14 +81,59 @@ Object::fields stores values/functions. Object::property(name, getter, setter)
 exposes live C++ properties; omitting the setter makes a property read-only.
 See the examples in ../../DEMO/EryScriptExamples.md.
 
+## Reflection API
+
+Include `eryscript/reflection.hpp` and keep an `eryscript::Reflection` instance
+alive for as long as its runtime uses native objects. Then call
+`reflection.bindNamespace<^^YourNamespace>(runtime)` once. Public classes,
+inherited fields, instance/static methods, constructors, enums and namespace
+functions/variables are discovered from C++ declarations. Methods keep their
+C++ names and signatures; default arguments and overload selection work.
+Private members, destructors, assignment/conversion operators and variadic C
+functions are not exported. Nested namespaces can be selected separately.
+
+`reflection.object(&object)` supplies a live script root. A const pointer makes
+the object read-only. Names are case-sensitive, just like C++. Nested reflected
+fields remain live; C++ results returned by value own their storage. Numeric
+conversions check range, finiteness and integral values. Enum arguments accept
+reflected enum constants, declared enumerator names, or valid numeric values.
+Typed constants distinguish enum overloads such as keyboard vs mouse input.
+Strings and numeric values convert directly, standard sequences convert to/from
+script arrays, and `std::function` supports native/script callbacks. Unique
+ownership and noncopyable collection elements cannot be assigned from arrays.
+Pointer/reference targets remain owned by the C++ host unless created by a
+reflected constructor; the host must keep them alive. `validate` allows a host
+to check that objects still exist, and `onError` reports callback exceptions.
+Destroying Reflection invalidates its native views and callbacks.
+
+For existing C++ functions, `reflection.bindFunctions<reflections...>(runtime)`
+discovers names and signatures without writing binding lambdas. For example:
+
+~~~cpp
+constexpr auto sine = std::meta::reflect_function(
+    *static_cast<double(*)(double)>(std::sin));
+reflection.bindFunctions<sine>(runtime); // Script can call sin(number).
+~~~
+
+Select a compiled overload with its C++ signature; already-instantiated C++
+templates can be selected the same way. Single-type member templates are
+automatically instantiated for types declared in the selected namespace when
+their constraints permit it. Constrain templates appropriately, as in ordinary
+C++. Reflection runs at compile time: it cannot discover an unincluded header
+or instantiate arbitrary templates requested later at runtime. C++ signatures
+without a supported value conversion produce an error rather than an unsafe
+cast. Script arrays still use the interpreter's own collection operations.
+
 ## Changes from the C# implementation
 
-C++17 has no CLR reflection. Explicit bindings replace assembly discovery,
-automatic overload resolution, generic CLR instantiation, and reflection-based
-member access. Only registered types and members are available. Unity objects,
+C++26 reflection replaces the engine's explicit member bindings with generated
+native views and calls. CLR assembly discovery and arbitrary runtime generic
+instantiation remain different: select C++ APIs during compilation. Unity objects,
 coroutines, ScriptDebugger, ModsManager subscriptions, and Unity/JSON AST
 serialization were removed. Source strings are the saved script representation.
-Tiny3D adapts logging, transforms, input, components, and callbacks separately.
+Tiny3D supplies scene lifetime checks and script execution hooks separately.
+The language's primitive constructors, collections, Math and Console remain
+built-in interpreter facilities; engine members use the generic reflection layer.
 
 Numbers use double, including integer literals. Arrays/collections hold dynamic
 values; generic collection names do not enforce CLR element types. Primitive

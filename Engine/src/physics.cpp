@@ -89,7 +89,10 @@ void closestSegmentBox(const Shape& round, const Shape& box, Vector3& onSegment,
     const Vector3 low = box.center - box.halfSize, high = box.center + box.halfSize;
     const float origin[3]{start.x, start.y, start.z}, direction[3]{delta.x, delta.y, delta.z};
     const float lo[3]{low.x, low.y, low.z}, hi[3]{high.x, high.y, high.z};
-    std::array<float, 8> cuts{0, 1};
+    // Unused entries stay at the final endpoint, so the whole array can be sorted.
+    std::array<float, 8> cuts;
+    cuts.fill(1);
+    cuts[0] = 0;
     int count = 2;
     for (int axis = 0; axis < 3; ++axis) {
         if (direction[axis] == 0) continue;
@@ -98,7 +101,7 @@ void closestSegmentBox(const Shape& round, const Shape& box, Vector3& onSegment,
             if (t > 0 && t < 1) cuts[count++] = t;
         }
     }
-    std::sort(cuts.begin(), cuts.begin() + count);
+    std::sort(cuts.begin(), cuts.end());
     onSegment = start;
     onBox = closestBoxPoint(start, box);
     float best = dot(onSegment - onBox, onSegment - onBox);
