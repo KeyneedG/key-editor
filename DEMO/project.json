@@ -1,3 +1,1 @@
-{
-  "sources": ["game.cpp"]
-}
+{"sources":["game.cpp"],"startupScene":"Assets/Untitled.scene.json"}

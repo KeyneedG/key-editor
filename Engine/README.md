@@ -1,14 +1,16 @@
 # Tiny3D
 
-A small, extensible C++26 3D engine with no external libraries. The software
-renderer uses the standard library; the native window and input use Windows
-Win32/GDI. CMake reads JSON without a separate JSON library.
+A small, extensible C++26 3D engine with no third-party libraries. The optional
+Direct3D 11 module renders native Windows games and the editor on the GPU. The
+software renderer remains available for fallback and headless rendering. Window
+and input handling use Win32. JSON needs no separate library.
 
 ```text
 Engine/
   include/tiny3d/    Public math, engine, physics, UI, and project API
   src/              Renderer, physics, UI, window/input loop, and project entry point
   EryScript/        Standalone interpreter and generic C++26 reflection bridge
+  Rendering/        Software presentation and optional Direct3D 11 module/shaders
   Tiny3D.sln        Visual Studio editor solution
   Tiny3D.vcxproj    Visual Studio project wrapping the GCC C++26 build
   engine.json       Selected project, mode, and automatic startup
@@ -26,8 +28,8 @@ DEMO/
 ```
 
 All engine files belong to `Engine`; all sample files belong to `DEMO`.
-You can delete `DEMO`. Select your own project or leave `project` empty to build
-only `libtiny3d.a` and `liberyscript.a`. Generated output stays in `Engine/build`
+You can delete `DEMO`. Select your own project, use an empty `project` in editor
+mode, or use an empty `project` in game mode to build only the libraries. Generated output stays in `Engine/build`
 and can be deleted.
 
 ## Visual Studio 2022
@@ -58,8 +60,8 @@ and can be deleted.
 
    Paths are relative to this JSON file or absolute. Use forward slashes or escape
    backslashes. The selected directory must contain `project.json`.
-   Both `editor` and `game` currently run the same runtime. Editing tools can be
-   added later.
+   `editor` opens the scene editor; `game` runs the project's game. Set `project`
+   to an empty string in editor mode to start with no project selected.
 4. Choose **Debug | x64** or **Release | x64** and press **Ctrl+Shift+B**.
    A successful build starts the selected project automatically. Close it before
    rebuilding. The executable is
@@ -126,6 +128,117 @@ If script execution is disabled:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Engine\build.ps1 -Configuration Release
 ```
 
+## Scene editor
+
+The editor is a separate `tiny3d_editor` library under `Engine/Editor`. Game builds
+link the runtime library only. The editor uses the engine's Canvas, Image,
+SimpleText, Button, ScrollRect, and InputField controls, and pauses scene scripts,
+physics, and game updates while editing.
+
+- **File:** New Scene, New Project, Open Project, Build Settings.
+- **Edit:** Undo, Redo, Save. Shortcuts: Ctrl+Z, Ctrl+Y/Ctrl+Shift+Z, Ctrl+S.
+- **Help:** About EryEngine.
+- **Hierarchy:** select objects or use **+** to create an empty object, cube,
+  plane, or camera. Children appear beneath their parents.
+- **Inspector:** edit names, tags, layers, visibility, local transforms, parent
+  index (-1 means no parent), and built-in component properties. Rotation fields
+  use degrees; vectors are X/Y/Z and colors are R/G/B. Add or remove components.
+  Camera/content reference fields use scene entity indices (-1 means no reference).
+- **Project:** double-click folders to browse and scene JSON files to load them;
+  Refresh reloads the directory listing. Wheel-scroll each panel independently.
+- **Scene view:** click a mesh to select it. Use W/E/R or the toolbar to move,
+  rotate, or scale; drag the colored primitive handles. Each drag is one undo
+  step; Escape cancels it. F frames the selection. Hold the right mouse button
+  to look and fly with WASD/QE; Shift speeds up movement. The wheel moves forward
+  and backward.
+
+Input fields commit on Enter or focus loss and restore their previous value on
+Escape. Clicking a field selects its text; Ctrl+A selects all. Arrow keys,
+Home/End, Backspace, and Delete edit text. EryScript code fields accept multiple
+lines; Ctrl+Enter commits them.
+
+**New Project** asks for a name and creates `Engine/Projects/<name>/Assets`, copies
+the current project's content into Assets, and saves the current scene as
+`Main.scene.json` (or the next available name when that scene already exists). It
+creates a `project.json` with an empty `sources` array, so
+the project can run directly from its saved startup scene. Build folders and
+symlinks are excluded from the copy. **New Scene** immediately creates a scene
+JSON in Assets. **Open Project** opens a native folder picker starting in
+`Engine/Projects`; select the project folder containing Assets and project.json.
+The chosen project is remembered in engine.json. Scene/project switches offer
+Save, Discard, and Cancel when the current scene has unsaved edits.
+
+**Build Settings** stores the startup scene, resolution, and fullscreen flag in
+project.json. To run a scene-based project, set engine.json's mode to `game` and
+rebuild. Existing C++ projects still use their own Game implementation and screen
+settings; the editor initially imports their scene from createGame() when no
+startup scene has been saved.
+
+JSON persistence covers all built-in components, shared mesh geometry, hierarchy
+links, tags, layers, visibility, and local transforms. UI-generated meshes are
+rebuilt after loading. Native callbacks, script execution state, and project-specific
+reflection bindings are runtime code and must be reattached by C++ projects.
+Custom C++ components require a serializer; saving reports unsupported components
+instead of silently dropping them. Undo/redo uses up to 64 scene snapshots.
+
+Include `tiny3d/scene.hpp` to use `serializeScene`, `deserializeScene`, `saveScene`,
+and `loadScene` from game code. Scene loading constructs a fresh scene and rejects
+bad links, cycles, mesh indices, and camera projections. Save replaces the file
+only after the complete JSON has been written.
+
+## Rendering backends
+
+Managed native executables default to `"renderer": "auto"`: try Direct3D 11
+hardware rendering and fall back to software if device initialization fails.
+Set `renderer` in engine.json to `"d3d11"` to require the GPU backend or
+`"software"` to use the original renderer. The setting is read at startup; no
+rebuild is required to switch an already included backend. The console reports
+the backend in use. You can also override it on the command line:
+
+```powershell
+Engine/build/GCC/Release/tiny3d_project.exe --renderer d3d11
+Engine/build/GCC/Release/tiny3d_project.exe --frames 60 --renderer software
+```
+
+Direct3D types, resources, HLSL shaders, and swap-chain handling live entirely
+inside `Rendering/Direct3D11`, built as `tiny3d_d3d11`. It supports the existing
+perspective/orthographic cameras, layer masks, depth ordering, color clearing,
+parent transforms, flat lighting, unlit UI, and letterboxing. Meshes are uploaded
+once and cached while alive. When editing a shared mesh's arrays in place, call
+`mesh.markChanged()` afterwards; replacing the mesh also updates its GPU buffers.
+Unchanged UI text and scroll clipping retain their meshes between frames.
+
+The engine's `tiny3d/graphics.hpp` defines the small `RenderBackend` interface:
+resize, render, present, dimensions, and explicit pixel readback. The window loop
+accepts a `graphics::BackendFactory`; it owns no Direct3D objects. Other APIs can
+implement this interface in another module and supply their own factory. Existing
+calls to `run(game)` still work using the software backend. For a custom loop or
+executable using Direct3D, link `tiny3d_d3d11` and provide the factory:
+
+```cpp
+#include "tiny3d/d3d11.hpp"
+tiny3d::run(game, 800, 500, 0, [](void* window, int width, int height) {
+    return tiny3d::d3d11::createRenderer(window, width, height);
+});
+```
+
+The Windows module builds by default. Configure with `-DTINY3D_ENABLE_D3D11=OFF`
+to omit it; non-Windows and `TINY3D_HEADLESS` builds omit it automatically. It uses
+system D3D11/DXGI/D3DCompiler libraries and feature level 11.0, with a Windows 10+
+flip-model swap chain. Shader sources are embedded at build time, so launching
+does not depend on their directory. A device/presentation failure after startup
+is reported; automatic device-loss recovery is outside this basic module.
+
+`--render file.ppm` uses software by default and works without a native window.
+Add `--renderer d3d11` to render offscreen with hardware and explicitly read the
+frame back. Normal GPU rendering/presentation does not copy pixels to the CPU.
+The optional `d3d11_checks` test uses WARP for repeatable GPU-pipeline validation;
+run `tiny3d_d3d11_checks.exe --hardware` to validate on the actual GPU. It compares
+rendered images against the software renderer and exercises resize/presentation.
+
+API references: [Direct3D device creation](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-d3d11createdevice)
+and [swap-chain resizing](https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgiswapchain-resizebuffers).
+
 ## Your own game
 
 A game directory contains C++ source files and `project.json`:
@@ -152,7 +265,7 @@ Include `tiny3d/project.hpp`, derive a class from `tiny3d::Game`, and implement:
 Implement `std::unique_ptr<tiny3d::Game> tiny3d::createGame()` to construct your
 game. The engine supplies `main()` through `src/project_main.cpp`.
 
-Own the scene in your game class. Each `Entity` has a transform, visibility flag,
+Own the scene in your game class. Each `Entity` has a name, transform, visibility flag,
 `layer` (0 by default), `tag` (`"Untagged"` by default), and an owned list of components.
 `Component` is abstract with a virtual destructor;
 derive from it to add your own component types. Use `addComponent<T>(...)` to
@@ -471,6 +584,19 @@ Picking selects the nearest button for the camera with the highest depth; it doe
 not test occlusion against non-button meshes. Keep the assigned canvas camera alive.
 Call `ui.cancel()` when rebuilding a scene or switching menus.
 
+An **InputField** shares an entity with an Image. Set `text`, `placeholder`,
+`pixelSize`, `maxLength` (UTF-8 bytes), and `onSubmit(const std::string&)`; the UI
+creates its text graphics. Set `multiline` to accept line breaks. The Windows
+backend collects actual typed characters in `Input::text`, independently of key
+states. SimpleText's existing font still supplies the glyphs.
+
+A **ScrollRect** shares an entity with an Image defining the clip rectangle.
+Assign a direct child to `content`, set `contentHeight`, and optionally set
+`offset` and `wheelSpeed`. Its child's initial local position is the origin;
+positive offsets move content upwards. Descendant Image/SimpleText/InputField
+meshes and button/input picking are clipped to the rectangle, including nested
+scroll rectangles. `contentPosition()` reports the unscrolled position for saving.
+
 ## Screen settings
 
 Override `Game::screenSettings()` and return your current requested settings:
@@ -515,3 +641,8 @@ wrapper and automatic startup are Windows features.
 
 Managed executables accept `--render <file.ppm>` for a headless RGB frame and
 `--frames <count>` for a bounded native-window run.
+
+Optional integration checks: configure with `-DTINY3D_BUILD_TESTS=ON`, build, then
+run `ctest --test-dir <build-directory> --output-on-failure`. These exercise scene
+round-trips, invalid input, UI clipping/text input, project and scene workflows,
+editor menus, gizmo undo/redo, game rendering, and an editor with no project.

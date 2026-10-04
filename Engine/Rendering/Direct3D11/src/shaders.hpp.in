@@ -1,0 +1,5 @@
+#pragma once
+namespace tiny3d::d3d11::shaders {
+inline constexpr char scene[] = R"eryshader(@SCENE_SHADER@)eryshader";
+inline constexpr char present[] = R"eryshader(@PRESENT_SHADER@)eryshader";
+}

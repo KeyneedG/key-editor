@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tiny3d/math.hpp"
+#include "tiny3d/graphics.hpp"
 
 #include <array>
 #include <cstddef>
@@ -27,6 +28,9 @@ struct Mesh {
     std::vector<Vector3> vertices{};
     // Counterclockwise winding when viewed from outside the surface.
     std::vector<std::array<std::size_t, 3>> triangles{};
+    std::uint64_t revision = 0;
+    // Call after editing these arrays in place so cached render backends re-upload them.
+    void markChanged() { ++revision; }
 };
 
 Mesh cube();   // Unit cube, centered at the origin.
@@ -62,6 +66,7 @@ struct Entity {
     Transform transform{};
     bool visible = true;
     std::uint8_t layer = 0;
+    std::string name = "Object";
     std::string tag = "Untagged";
     std::vector<std::unique_ptr<Component>> components;
 
@@ -75,6 +80,7 @@ struct Entity {
         transform = entity.transform;
         visible = entity.visible;
         layer = entity.layer;
+        name = std::move(entity.name);
         tag = std::move(entity.tag);
         components = std::move(entity.components);
         parent_ = entity.parent_;
@@ -256,6 +262,7 @@ struct Input {
     Viewport viewport{0, 0, 800, 500};
     float mouseDeltaX = 0, mouseDeltaY = 0; // Raw movement accumulated this frame.
     float mouseWheel = 0, mouseWheelHorizontal = 0; // Wheel steps accumulated this frame.
+    std::string text{}; // UTF-8 characters entered this frame, supplied by the platform.
 
     bool held(Key key) const { return state(keys, key).down; }
     bool pressed(Key key) const { return state(keys, key).pressed; }
@@ -271,12 +278,14 @@ struct Input {
         for (auto& key : keys) key.pressed = key.released = false;
         for (auto& button : mouseButtons) button.pressed = button.released = false;
         mouseDeltaX = mouseDeltaY = mouseWheel = mouseWheelHorizontal = 0;
+        text.clear();
     }
     void releaseAll() {
         for (auto& key : keys) { key.pressed = false; key.set(false); }
         for (auto& button : mouseButtons) { button.pressed = false; button.set(false); }
         mouseDeltaX = mouseDeltaY = mouseWheel = mouseWheelHorizontal = 0;
         focused = false;
+        text.clear();
     }
 
 private:
@@ -308,10 +317,12 @@ public:
     virtual bool captureMouse() const { return false; }
     virtual bool shouldQuit() const { return false; }
     virtual ScreenSettings screenSettings() const { return {}; }
+    virtual bool executeScripts() const { return true; }
 };
 
 // Native Windows window. Other platforms can use Renderer directly.
 // A nonzero frameLimit is useful for automated smoke tests.
-int run(Game& game, int width = 800, int height = 500, unsigned frameLimit = 0);
+int run(Game& game, int width = 800, int height = 500, unsigned frameLimit = 0,
+        graphics::BackendFactory rendererFactory = {});
 
 } // namespace tiny3d

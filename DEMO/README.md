@@ -5,13 +5,13 @@ Open `Engine/Tiny3D.sln` in Visual Studio 2022 and set `Engine/engine.json` to:
 ```json
 {
   "project": "../DEMO",
-  "mode": "editor",
+  "mode": "game",
   "autoStart": true
 }
 ```
 
 Choose **Debug | x64** or **Release | x64**, then press **Ctrl+Shift+B** to build
-and start the demo. Both `editor` and `game` modes work the same for now.
+and start the demo. Use `editor` mode to inspect and edit its initial scene.
 The solution builds through GCC with C++26 reflection enabled. Use GDB for source
 debugging; setup and commands are in [Engine/README.md](../Engine/README.md).
 
@@ -45,7 +45,8 @@ Images are solid-color planes, and the built-in text is made from small planes,
 so the demo needs no image or font assets.
 
 The entire `DEMO` folder is optional. After deleting it, select your own project
-or set `project` to `""` to build only the engine library. Build and API
+or set `project` to `""` in game mode to build only the engine library. An empty
+project in editor mode opens the editor. Build and API
 instructions are in [Engine/README.md](../Engine/README.md).
 
 The collectibles use reflected engine APIs and a directly reflected `std::sin`

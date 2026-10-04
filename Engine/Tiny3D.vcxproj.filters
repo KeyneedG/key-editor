@@ -1,6 +1,14 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
+    <ClCompile Include="Rendering\Direct3D11\src\d3d11.cpp"><Filter>Rendering</Filter></ClCompile>
+    <ClCompile Include="Rendering\Software\src\software.cpp"><Filter>Rendering</Filter></ClCompile>
+    <ClCompile Include="tests\d3d11_checks.cpp"><Filter>Rendering</Filter></ClCompile>
+    <ClCompile Include="src\scene.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="Editor\src\editor.cpp"><Filter>Editor</Filter></ClCompile>
+    <ClCompile Include="Editor\src\panels.cpp"><Filter>Editor</Filter></ClCompile>
+    <ClCompile Include="Editor\src\dialogs.cpp"><Filter>Editor</Filter></ClCompile>
+    <ClCompile Include="tests\editor_checks.cpp"><Filter>Editor</Filter></ClCompile>
     <ClCompile Include="src\eryscript.cpp">
       <Filter>Engine</Filter>
     </ClCompile>
@@ -30,6 +38,11 @@
     <ClInclude Include="include\tiny3d\engine.hpp">
       <Filter>Engine</Filter>
     </ClInclude>
+    <ClInclude Include="include\tiny3d\scene.hpp"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="include\tiny3d\graphics.hpp"><Filter>Rendering</Filter></ClInclude>
+    <ClInclude Include="Rendering\Direct3D11\include\tiny3d\d3d11.hpp"><Filter>Rendering</Filter></ClInclude>
+    <ClInclude Include="include\tiny3d\json.hpp"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="Editor\include\tiny3d\editor.hpp"><Filter>Editor</Filter></ClInclude>
     <ClInclude Include="include\tiny3d\eryscript.hpp">
       <Filter>Engine</Filter>
     </ClInclude>
@@ -53,6 +66,10 @@
     <None Include="build.ps1">
       <Filter>Misc</Filter>
     </None>
+    <None Include="Rendering\Direct3D11\CMakeLists.txt"><Filter>Rendering</Filter></None>
+    <None Include="Rendering\Direct3D11\src\shaders.hpp.in"><Filter>Rendering</Filter></None>
+    <None Include="Rendering\Direct3D11\shaders\scene.hlsl"><Filter>Rendering</Filter></None>
+    <None Include="Rendering\Direct3D11\shaders\present.hlsl"><Filter>Rendering</Filter></None>
     <None Include="EryScript\CMakeLists.txt">
       <Filter>EryScript</Filter>
     </None>
@@ -88,6 +105,8 @@
     <Filter Include="Engine">
       <UniqueIdentifier>{afcee2d3-816c-476f-8857-ae06de78d045}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Editor"><UniqueIdentifier>{8A772B21-C4AA-49F1-9221-1D873451CB3D}</UniqueIdentifier></Filter>
+    <Filter Include="Rendering"><UniqueIdentifier>{C2107D35-3E19-4B2A-9138-F04D321101AA}</UniqueIdentifier></Filter>
     <Filter Include="EryScript">
       <UniqueIdentifier>{44BCAEE2-25C1-4A66-815C-D6C6D733475C}</UniqueIdentifier>
     </Filter>

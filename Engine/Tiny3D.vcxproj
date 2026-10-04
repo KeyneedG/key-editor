@@ -31,7 +31,7 @@
     <NMakeReBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)build.ps1" -Configuration $(Configuration) -ConfigFile "$(Tiny3DConfigFile)" -ToolchainDirectory "$(Tiny3DToolchainDirectory)" -Rebuild</NMakeReBuildCommandLine>
     <NMakeCleanCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)build.ps1" -Configuration $(Configuration) -ConfigFile "$(Tiny3DConfigFile)" -ToolchainDirectory "$(Tiny3DToolchainDirectory)" -Clean</NMakeCleanCommandLine>
     <NMakeOutput>$(OutDir)tiny3d_project.exe</NMakeOutput>
-    <NMakeIncludeSearchPath>$(ProjectDir)include;$(ProjectDir)EryScript\include;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
+    <NMakeIncludeSearchPath>$(ProjectDir)include;$(ProjectDir)Editor\include;$(ProjectDir)Rendering\Direct3D11\include;$(ProjectDir)build\GCC\$(Configuration)\Rendering\Direct3D11\generated;$(ProjectDir)EryScript\include;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
     <NMakePreprocessorDefinitions>_WIN32;$(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
     <AdditionalOptions>/std:c++latest $(AdditionalOptions)</AdditionalOptions>
     <LocalDebuggerCommand>$(OutDir)tiny3d_project.exe</LocalDebuggerCommand>
@@ -50,6 +50,11 @@
     <ClInclude Include="include\tiny3d\project.hpp" />
     <ClInclude Include="include\tiny3d\ui.hpp" />
     <ClInclude Include="include\tiny3d\eryscript.hpp" />
+    <ClInclude Include="include\tiny3d\scene.hpp" />
+    <ClInclude Include="include\tiny3d\graphics.hpp" />
+    <ClInclude Include="Rendering\Direct3D11\include\tiny3d\d3d11.hpp" />
+    <ClInclude Include="include\tiny3d\json.hpp" />
+    <ClInclude Include="Editor\include\tiny3d\editor.hpp" />
     <ClInclude Include="EryScript\include\eryscript\eryscript.hpp" />
     <ClInclude Include="EryScript\include\eryscript\reflection.hpp" />
     <ClCompile Include="..\DEMO\game.cpp" Condition="Exists('$(ProjectDir)..\DEMO\game.cpp')" />
@@ -60,6 +65,18 @@
     <ClCompile Include="src\eryscript.cpp" />
     <ClCompile Include="EryScript\src\eryscript.cpp" />
     <ClCompile Include="src\project_main.cpp" />
+    <ClCompile Include="src\scene.cpp" />
+    <ClCompile Include="Editor\src\editor.cpp" />
+    <ClCompile Include="Editor\src\panels.cpp" />
+    <ClCompile Include="Editor\src\dialogs.cpp" />
+    <ClCompile Include="tests\editor_checks.cpp" />
+    <ClCompile Include="tests\d3d11_checks.cpp" />
+    <ClCompile Include="Rendering\Direct3D11\src\d3d11.cpp" />
+    <ClCompile Include="Rendering\Software\src\software.cpp" />
+    <None Include="Rendering\Direct3D11\CMakeLists.txt" />
+    <None Include="Rendering\Direct3D11\src\shaders.hpp.in" />
+    <None Include="Rendering\Direct3D11\shaders\scene.hlsl" />
+    <None Include="Rendering\Direct3D11\shaders\present.hlsl" />
     <None Include="engine.json" />
     <None Include="build.ps1" />
     <None Include="launch.ps1" />

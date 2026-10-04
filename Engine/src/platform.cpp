@@ -16,51 +16,15 @@
 
 namespace tiny3d {
 namespace {
-struct BackBuffer {
-    HDC dc = nullptr;
-    HBITMAP bitmap = nullptr;
-    HGDIOBJ originalBitmap = nullptr;
-    int width = 0, height = 0;
-
-    BackBuffer() = default;
-    BackBuffer(const BackBuffer&) = delete;
-    BackBuffer& operator=(const BackBuffer&) = delete;
-    ~BackBuffer() {
-        if (bitmap) {
-            SelectObject(dc, originalBitmap);
-            DeleteObject(bitmap);
-        }
-        if (dc) DeleteDC(dc);
-    }
-
-    bool resize(HDC target, int newWidth, int newHeight) {
-        if (!dc) dc = CreateCompatibleDC(target);
-        if (!dc) return false;
-        if (width == newWidth && height == newHeight) return true;
-        HBITMAP next = CreateCompatibleBitmap(target, newWidth, newHeight);
-        if (!next) return false;
-        HGDIOBJ previous = SelectObject(dc, next);
-        if (!previous || previous == HGDI_ERROR) { DeleteObject(next); return false; }
-        if (bitmap) DeleteObject(bitmap);
-        else originalBitmap = previous;
-        bitmap = next;
-        width = newWidth;
-        height = newHeight;
-        return true;
-    }
-};
-
 struct WindowState {
-    Renderer& renderer;
-    BackBuffer backBuffer;
     Input input;
     bool running = true;
     bool mouseCaptured = false;
     int cursorHideCalls = 0;
     bool hasAbsoluteMousePosition = false;
     POINT absoluteMousePosition{};
+    wchar_t highSurrogate = 0;
 
-    explicit WindowState(Renderer& source) : renderer(source) {}
 };
 
 struct ScreenState {
@@ -69,7 +33,7 @@ struct ScreenState {
     bool initialized = false, fullscreen = false;
 };
 
-void applyScreenSettings(HWND window, Renderer& renderer, ScreenState& state, ScreenSettings settings) {
+void applyScreenSettings(HWND window, RenderBackend& renderer, ScreenState& state, ScreenSettings settings) {
     if (state.initialized && settings == state.requested) return;
     if (settings.width < 0 || settings.height < 0) throw std::invalid_argument("Screen dimensions cannot be negative");
     const int width = settings.width ? settings.width : renderer.width();
@@ -188,28 +152,6 @@ void mouseEvent(WindowState& state, const RAWMOUSE& mouse) {
     if (mouse.usButtonFlags & RI_MOUSE_HWHEEL) input.mouseWheelHorizontal += wheel;
 }
 
-void present(HWND window, HDC dc, const Renderer& renderer, BackBuffer& buffer) {
-    RECT client{};
-    GetClientRect(window, &client);
-    if (client.right <= 0 || client.bottom <= 0 || !buffer.resize(dc, client.right, client.bottom)) return;
-    // Compose the frame and letterbox bars offscreen so the window never shows the clear.
-    if (!FillRect(buffer.dc, &client, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)))) return;
-    const Viewport viewport = fitViewport(client.right, client.bottom, renderer.width(), renderer.height());
-    if (viewport.width > 0 && viewport.height > 0) {
-        BITMAPINFO bitmap{};
-        bitmap.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        bitmap.bmiHeader.biWidth = renderer.width();
-        bitmap.bmiHeader.biHeight = -renderer.height(); // Top row first.
-        bitmap.bmiHeader.biPlanes = 1;
-        bitmap.bmiHeader.biBitCount = 32;
-        bitmap.bmiHeader.biCompression = BI_RGB;
-        const int result = StretchDIBits(buffer.dc, viewport.x, viewport.y, viewport.width, viewport.height,
-            0, 0, renderer.width(), renderer.height(), renderer.pixels().data(), &bitmap, DIB_RGB_COLORS, SRCCOPY);
-        if (!result || result == static_cast<int>(GDI_ERROR)) return;
-    }
-    BitBlt(dc, 0, 0, client.right, client.bottom, buffer.dc, 0, 0, SRCCOPY);
-}
-
 LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     auto* state = reinterpret_cast<WindowState*>(GetWindowLongPtrW(window, GWLP_USERDATA));
     if (message == WM_NCCREATE) {
@@ -231,8 +173,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
         return DefWindowProcW(window, message, wparam, lparam);
     case WM_PAINT: {
         PAINTSTRUCT paint{};
-        HDC dc = BeginPaint(window, &paint);
-        present(window, dc, state->renderer, state->backBuffer);
+        BeginPaint(window, &paint);
         EndPaint(window, &paint);
         return 0;
     }
@@ -242,11 +183,29 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
         state->hasAbsoluteMousePosition = false;
         return 0;
     case WM_KILLFOCUS:
+        state->highSurrogate = 0;
         state->input.releaseAll();
         state->hasAbsoluteMousePosition = false;
         captureMouse(window, *state, false);
         if (GetCapture() == window) ReleaseCapture();
         return 0;
+    case WM_CHAR: {
+        if (!state->input.focused || wparam < 32) return 0;
+        wchar_t characters[2]{static_cast<wchar_t>(wparam), 0};
+        int count = 1;
+        if (wparam >= 0xd800 && wparam <= 0xdbff) {
+            state->highSurrogate = characters[0]; return 0;
+        }
+        if (wparam >= 0xdc00 && wparam <= 0xdfff && state->highSurrogate) {
+            characters[1] = characters[0]; characters[0] = state->highSurrogate; count = 2;
+        }
+        state->highSurrogate = 0;
+        char bytes[8]{};
+        const int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, characters, count,
+                                             bytes, sizeof(bytes), nullptr, nullptr);
+        if (size > 0) state->input.text.append(bytes, size);
+        return 0;
+    }
     case WM_KEYDOWN: case WM_KEYUP:
         if (state->input.focused) keyboardEvent(state->input, wparam, lparam, message == WM_KEYDOWN);
         return 0;
@@ -301,11 +260,10 @@ struct WindowHandle {
 };
 } // namespace
 
-int run(Game& game, int width, int height, unsigned frameLimit) {
+int run(Game& game, int width, int height, unsigned frameLimit, graphics::BackendFactory rendererFactory) {
     Scripts scripts;
-    scripts.awake(game.scene());
-    Renderer renderer(width, height);
-    WindowState state{renderer};
+    if (game.executeScripts()) scripts.awake(game.scene());
+    WindowState state;
     HINSTANCE instance = GetModuleHandleW(nullptr);
     constexpr const wchar_t* className = L"Tiny3DWindow";
     WNDCLASSW windowClass{};
@@ -323,6 +281,10 @@ int run(Game& game, int width, int height, unsigned frameLimit) {
         CW_USEDEFAULT, CW_USEDEFAULT, bounds.right - bounds.left, bounds.bottom - bounds.top,
         nullptr, nullptr, instance, &state)};
     if (!window.value) throw std::runtime_error("Cannot create window");
+    auto backend = rendererFactory ? rendererFactory(window.value, width, height) : createSoftwareRenderer(window.value, width, height);
+    if (!backend) throw std::runtime_error("Render backend factory returned null");
+    RenderBackend& renderer = *backend;
+    std::cout << "Renderer: " << renderer.name() << '\n';
     RAWINPUTDEVICE mouse{0x01, 0x02, 0, window.value};
     if (!RegisterRawInputDevices(&mouse, 1, sizeof(mouse))) {
         throw std::runtime_error("Cannot register mouse input");
@@ -330,8 +292,10 @@ int run(Game& game, int width, int height, unsigned frameLimit) {
     window.rawMouse = true;
     ScreenState screen;
     applyScreenSettings(window.value, renderer, screen, game.screenSettings());
-    renderer.render(game.scene()); // The first paint must also have a complete frame.
+    renderer.render(game.scene(), {28, 36, 52});
     ShowWindow(window.value, SW_SHOW);
+    RECT firstClient{}; GetClientRect(window.value, &firstClient);
+    renderer.present(firstClient.right, firstClient.bottom);
 
     constexpr std::array<int, 5> mouseButtons{VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2};
     Input& input = state.input;
@@ -377,17 +341,17 @@ int run(Game& game, int width, int height, unsigned frameLimit) {
         const float seconds = std::min(elapsed, .05f); // Avoid jumps after pauses or window dragging.
         game.update(seconds, input);
         if (game.shouldQuit()) break;
-        scripts.update(game.scene(), seconds, input);
+        if (game.executeScripts()) scripts.update(game.scene(), seconds, input);
         applyScreenSettings(window.value, renderer, screen, game.screenSettings());
         captureMouse(window.value, state, game.captureMouse());
-        renderer.render(game.scene());
+        renderer.render(game.scene(), {28, 36, 52});
         const std::string title = game.title();
         if (title != previousTitle) {
             SetWindowTextA(window.value, title.c_str());
             previousTitle = title;
         }
-        InvalidateRect(window.value, nullptr, FALSE);
-        UpdateWindow(window.value);
+        GetClientRect(window.value, &client);
+        renderer.present(client.right, client.bottom);
         if (frameLimit && ++frames >= frameLimit) break;
         std::this_thread::sleep_until(frameStart + std::chrono::milliseconds(16));
     }
@@ -397,7 +361,7 @@ int run(Game& game, int width, int height, unsigned frameLimit) {
 
 #else
 namespace tiny3d {
-int run(Game&, int, int, unsigned) {
+int run(Game&, int, int, unsigned, graphics::BackendFactory) {
     std::cerr << "The window backend is unavailable in this build. Use tiny3d_project --render frame.ppm, "
                  "or add a platform backend in src/platform.cpp.\n";
     return 1;

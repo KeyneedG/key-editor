@@ -59,6 +59,11 @@ std::array<unsigned, 7> glyph(unsigned char character) {
     case ']': return {14,2,2,2,2,2,14};
     case '<': return {1,2,4,8,4,2,1};
     case '>': return {16,8,4,2,4,8,16};
+    case '|': return {4,4,4,4,4,4,4};
+    case '*': return {0,21,14,31,14,21,0};
+    case '\\': return {16,8,8,4,2,2,1};
+    case '"': return {10,10,10,0,0,0,0};
+    case '\'': return {4,4,4,0,0,0,0};
     case '%': return {17,2,4,4,8,16,17};
     default: return {14,17,1,2,4,0,4};
     }
@@ -130,9 +135,93 @@ bool hit(const Entity& entity, const Image& image, const Canvas& canvas, const I
         std::abs(point.x) <= image.width * .5f && std::abs(point.y) <= image.height * .5f;
 }
 
+bool clippedHit(const Entity& entity, const Image& image, const Canvas& canvas, const Input& input, float& distance) {
+    if (!hit(entity, image, canvas, input, distance)) return false;
+    for (const Entity* p = entity.parent(); p; p = p->parent()) {
+        const auto* scroll = p->getComponent<ScrollRect>();
+        if (!scroll || !scroll->enabled) continue;
+        const auto* rect = p->getComponent<Image>(); float ignored = 0;
+        if (!rect || !hit(*p, *rect, canvas, input, ignored)) return false;
+    }
+    return true;
+}
+
+// Clip generated triangles in each ancestor's local rectangle, then return to local space.
+std::shared_ptr<const Mesh> clippedMesh(const Entity& entity, std::shared_ptr<const Mesh> source,
+                                     detail::UIClipCache& cache, const Entity* ownRect = nullptr) {
+    std::vector<const Entity*> masks;
+    if (ownRect) masks.push_back(ownRect);
+    for (const Entity* p = entity.parent(); p; p = p->parent())
+        if (const auto* s = p->getComponent<ScrollRect>(); s && s->enabled && p->getComponent<Image>()) masks.push_back(p);
+    if (masks.empty() || !source) { cache = {}; return source; }
+    std::vector<float> state;
+    const auto matrix = [&](const Transform& transform) {
+        for (auto v : {transform.position(), transform.vector({1, 0, 0}), transform.vector({0, 1, 0}), transform.vector({0, 0, 1})})
+            state.insert(state.end(), {v.x, v.y, v.z});
+    };
+    matrix(entity.transform);
+    for (const Entity* mask : masks) { matrix(mask->transform); const auto* image = mask->getComponent<Image>(); state.insert(state.end(), {image->width, image->height}); }
+    if (cache.source == source && cache.state == state) return cache.result;
+    for (const Entity* p = &entity; p; p = p->parent()) {
+        auto s = p->transform.localScale;
+        if (s.x == 0 || s.y == 0 || s.z == 0) return std::make_shared<Mesh>();
+    }
+    auto result = std::make_shared<Mesh>();
+    for (auto triangle : source->triangles) {
+        std::vector<Vector3> polygon;
+        for (auto i : triangle) polygon.push_back(entity.transform.point(source->vertices[i]));
+        for (const Entity* mask : masks) {
+            const auto* image = mask->getComponent<Image>();
+            for (auto& v : polygon) v = mask->transform.inversePoint(v);
+            for (int side = 0; side < 4 && !polygon.empty(); ++side) {
+                const auto distance = [&](Vector3 v) { return side == 0 ? v.x + image->width * .5f :
+                    side == 1 ? image->width * .5f - v.x : side == 2 ? v.y + image->height * .5f : image->height * .5f - v.y; };
+                std::vector<Vector3> next;
+                Vector3 previous = polygon.back(); float d0 = distance(previous);
+                for (auto v : polygon) {
+                    float d1 = distance(v);
+                    if ((d0 >= 0) != (d1 >= 0)) next.push_back(previous + (v - previous) * (d0 / (d0 - d1)));
+                    if (d1 >= 0) next.push_back(v);
+                    previous = v; d0 = d1;
+                }
+                polygon = std::move(next);
+            }
+            for (auto& v : polygon) v = mask->transform.point(v);
+        }
+        const auto first = result->vertices.size();
+        for (auto v : polygon) result->vertices.push_back(entity.transform.inversePoint(v));
+        for (std::size_t i = 1; i + 1 < polygon.size(); ++i) result->triangles.push_back({first, first + i, first + i + 1});
+    }
+    cache.source = source; cache.state = std::move(state); cache.result = result;
+    return cache.result;
+}
+
+std::size_t previousCharacter(const std::string& s, std::size_t i) {
+    if (i) --i;
+    while (i && (static_cast<unsigned char>(s[i]) & 0xc0) == 0x80) --i;
+    return i;
+}
+std::size_t nextCharacter(const std::string& s, std::size_t i) {
+    if (i < s.size()) ++i;
+    while (i < s.size() && (static_cast<unsigned char>(s[i]) & 0xc0) == 0x80) ++i;
+    return i;
+}
+
 } // namespace
 
 void UI::refresh(Scene& scene) {
+    for (Entity& entity : scene.entities) {
+        auto* scroll = entity.getComponent<ScrollRect>(); const auto* rect = entity.getComponent<Image>();
+        if (!scroll || !scroll->enabled || !rect || !scroll->content) continue;
+        if (!std::isfinite(scroll->contentHeight) || !std::isfinite(scroll->offset) || !std::isfinite(scroll->wheelSpeed))
+            throw std::invalid_argument("Scroll settings must be finite");
+        if (scroll->content->parent() != &entity) throw std::invalid_argument("ScrollRect content must be a direct child");
+        if (scroll->trackedContent_ != scroll->content) {
+            scroll->trackedContent_ = scroll->content; scroll->origin_ = scroll->content->transform.localPosition;
+        }
+        scroll->offset = std::clamp(scroll->offset, 0.f, std::max(0.f, scroll->contentHeight - rect->height));
+        scroll->content->transform.localPosition = scroll->origin_ + Vector3{0, scroll->offset, 0};
+    }
     for (Entity& entity : scene.entities) {
         auto* image = entity.getComponent<Image>();
         auto* text = entity.getComponent<SimpleText>();
@@ -147,12 +236,13 @@ void UI::refresh(Scene& scene) {
             if (!std::isfinite(image->width) || !std::isfinite(image->height) || image->width <= 0 || image->height <= 0) {
                 throw std::invalid_argument("UI image dimensions must be positive and finite");
             }
-            if (!visual->mesh || image->width != image->builtWidth_ || image->height != image->builtHeight_) {
+            if (!image->sourceMesh_ || image->width != image->builtWidth_ || image->height != image->builtHeight_) {
                 auto mesh = std::make_shared<Mesh>();
                 quad(*mesh, -image->width * .5f, -image->height * .5f, image->width, image->height);
-                visual->mesh = mesh;
+                image->sourceMesh_ = mesh;
                 image->builtWidth_ = image->width; image->builtHeight_ = image->height;
             }
+            visual->mesh = clippedMesh(entity, image->sourceMesh_, image->clip_);
             visual->color = image->color;
             if (const auto* button = entity.getComponent<Button>(); button && button->enabled) {
                 visual->color = !button->interactable ? button->disabledColor : button->pressed ? button->pressedColor :
@@ -162,14 +252,51 @@ void UI::refresh(Scene& scene) {
             if (!std::isfinite(text->pixelSize) || text->pixelSize <= 0) {
                 throw std::invalid_argument("UI text pixel size must be positive and finite");
             }
-            if (!visual->mesh || text->text != text->builtText_ || text->pixelSize != text->builtPixelSize_ ||
+            if (!text->sourceMesh_ || text->text != text->builtText_ || text->pixelSize != text->builtPixelSize_ ||
                 text->centered != text->builtCentered_) {
-                visual->mesh = textMesh(*text);
+                text->sourceMesh_ = textMesh(*text);
                 text->builtText_ = text->text; text->builtPixelSize_ = text->pixelSize; text->builtCentered_ = text->centered;
             }
+            visual->mesh = clippedMesh(entity, text->sourceMesh_, text->clip_);
             visual->color = text->color;
         }
+        if (auto* field = entity.getComponent<InputField>(); field && image) {
+            if (!std::isfinite(field->pixelSize) || field->pixelSize <= 0) throw std::invalid_argument("Input text size must be positive and finite");
+            if (!field->textVisual_) field->textVisual_ = &entity.addComponent<MeshRenderer>();
+            auto& ink = *field->textVisual_;
+            ink.enabled = field->enabled && visual->enabled; ink.unlit = true;
+            ink.color = field->text.empty() && !field->focused ? Color{140, 150, 166} : Color{240, 244, 255};
+            std::string display = field->text.empty() && !field->focused ? field->placeholder : field->text;
+            if (field->focused) display.insert(std::min(cursor_, display.size()), "|");
+            // Keep the caret visible in a single-line field.
+            if (!field->multiline) {
+                const auto columns = static_cast<std::size_t>(std::max(1.f, (image->width - 12) / (6 * field->pixelSize)));
+                if (field->focused && cursor_ >= columns) display.erase(0, cursor_ - columns + 1);
+            }
+            if (!field->sourceMesh_ || display != field->builtText_ || field->pixelSize != field->builtPixelSize_ ||
+                image->width != field->builtWidth_ || image->height != field->builtHeight_) {
+                SimpleText label; label.text = display; label.pixelSize = field->pixelSize; label.centered = false;
+                auto mesh = textMesh(label);
+                for (auto& v : mesh->vertices) { v.x += -image->width * .5f + 6; v.y += image->height * .5f - 6; v.z = -.02f; }
+                field->sourceMesh_ = mesh; field->builtText_ = display; field->builtPixelSize_ = field->pixelSize;
+                field->builtWidth_ = image->width; field->builtHeight_ = image->height;
+            }
+            ink.mesh = clippedMesh(entity, field->sourceMesh_, field->clip_, &entity);
+        }
     }
+}
+
+void UI::cancel() {
+    pressed_ = nullptr;
+    if (focused_) if (auto* field = focused_->getComponent<InputField>()) field->focused = false;
+    focused_ = nullptr; initialText_.clear(); cursor_ = 0; selectAll_ = false;
+}
+
+void UI::focus(Entity& entity) {
+    if (focused_) focused_->getComponent<InputField>()->focused = false;
+    auto* field = entity.getComponent<InputField>();
+    focused_ = field && field->enabled && field->interactable ? &entity : nullptr;
+    if (focused_) { field->focused = true; initialText_ = field->text; cursor_ = field->text.size(); selectAll_ = true; }
 }
 
 void UI::update(Scene& scene, const Input& input) {
@@ -181,30 +308,78 @@ void UI::update(Scene& scene, const Input& input) {
             const auto* button = entity.getComponent<Button>();
             const auto* image = entity.getComponent<Image>();
             const auto* canvas = canvasOf(entity);
-            if (!entity.visibleInHierarchy() || !button || !button->enabled || !button->interactable ||
+            const auto* field = entity.getComponent<InputField>();
+            if (!entity.visibleInHierarchy() ||
+                !((button && button->enabled && button->interactable) || (field && field->enabled && field->interactable)) ||
                 !image || !image->enabled || !canvas) continue;
             float distance = 0;
-            if (!hit(entity, *image, *canvas, input, distance)) continue;
+            if (!clippedHit(entity, *image, *canvas, input, distance)) continue;
             const float depth = canvas->camera->getComponent<Camera>()->depth;
             if (!hovered || depth > cameraDepth || (depth == cameraDepth && distance < closest)) {
                 hovered = &entity; cameraDepth = depth; closest = distance;
             }
         }
-    } else cancel();
-    if (input.pressed(MouseButton::Left)) pressed_ = hovered;
-    std::function<void()> clicked;
-    if (input.released(MouseButton::Left)) {
-        if (hovered && hovered == pressed_) clicked = hovered->getComponent<Button>()->onClick;
-        cancel();
     }
-    if (!input.held(MouseButton::Left)) cancel();
+    std::vector<std::function<void()>> callbacks;
+    const auto commit = [&] {
+        if (!focused_) return;
+        auto* field = focused_->getComponent<InputField>();
+        field->focused = false;
+        if (field->onSubmit) callbacks.push_back([action = field->onSubmit, value = field->text] { action(value); });
+        focused_ = nullptr; selectAll_ = false;
+    };
+    if (focused_ && (!input.focused || !focused_->visibleInHierarchy() || !focused_->getComponent<InputField>()->enabled)) commit();
+    if (input.pressed(MouseButton::Left) && hovered != focused_) {
+        commit();
+        if (hovered) if (auto* field = hovered->getComponent<InputField>()) {
+            (void)field; focus(*hovered);
+        }
+    }
+    if (focused_) {
+        auto& field = *focused_->getComponent<InputField>();
+        cursor_ = std::min(cursor_, field.text.size());
+        if (input.held(Key::Control) && input.pressed(Key::A)) selectAll_ = true;
+        const auto eraseSelection = [&] { if (selectAll_) { field.text.clear(); cursor_ = 0; selectAll_ = false; return true; } return false; };
+        if (input.pressed(Key::Backspace) && !eraseSelection() && cursor_) {
+            auto p = previousCharacter(field.text, cursor_); field.text.erase(p, cursor_ - p); cursor_ = p;
+        }
+        if (input.pressed(Key::Delete) && !eraseSelection() && cursor_ < field.text.size()) field.text.erase(cursor_, nextCharacter(field.text, cursor_) - cursor_);
+        if (input.pressed(Key::LeftArrow)) { cursor_ = previousCharacter(field.text, cursor_); selectAll_ = false; }
+        if (input.pressed(Key::RightArrow)) { cursor_ = nextCharacter(field.text, cursor_); selectAll_ = false; }
+        if (input.pressed(Key::Home)) { cursor_ = 0; selectAll_ = false; }
+        if (input.pressed(Key::End)) { cursor_ = field.text.size(); selectAll_ = false; }
+        std::string entered = input.text;
+        if (field.multiline && input.pressed(Key::Enter) && !input.held(Key::Control)) entered += '\n';
+        if (!entered.empty() && !input.held(Key::Control)) {
+            eraseSelection();
+            if (field.text.size() + entered.size() <= field.maxLength) { field.text.insert(cursor_, entered); cursor_ += entered.size(); }
+        }
+        if (input.pressed(Key::Escape)) { field.text = initialText_; field.focused = false; focused_ = nullptr; selectAll_ = false; }
+        else if ((input.pressed(Key::Enter) || input.pressed(Key::NumpadEnter)) && (!field.multiline || input.held(Key::Control))) commit();
+    }
+    Entity* scrolled = nullptr; float scrollDepth = -std::numeric_limits<float>::infinity(), scrollDistance = std::numeric_limits<float>::infinity();
+    if (input.focused && input.mouseWheel != 0) for (auto& entity : scene.entities) {
+        auto* scroll = entity.getComponent<ScrollRect>(); const auto* image = entity.getComponent<Image>(); const auto* canvas = canvasOf(entity);
+        if (!scroll || !scroll->enabled || !image || !canvas || !entity.visibleInHierarchy()) continue;
+        float distance = 0;
+        if (!clippedHit(entity, *image, *canvas, input, distance)) continue;
+        float depth = canvas->camera->getComponent<Camera>()->depth;
+        if (depth > scrollDepth || (depth == scrollDepth && distance < scrollDistance)) { scrolled = &entity; scrollDepth = depth; scrollDistance = distance; }
+    }
+    if (scrolled) { auto& s = *scrolled->getComponent<ScrollRect>(); s.offset -= input.mouseWheel * s.wheelSpeed; }
+    if (input.pressed(MouseButton::Left)) pressed_ = hovered;
+    if (input.released(MouseButton::Left)) {
+        if (hovered && hovered == pressed_) if (auto* button = hovered->getComponent<Button>(); button && button->onClick) callbacks.push_back(button->onClick);
+        pressed_ = nullptr;
+    }
+    if (!input.held(MouseButton::Left) || !input.focused) pressed_ = nullptr;
     for (Entity& entity : scene.entities) {
         if (auto* button = entity.getComponent<Button>()) {
             button->hovered = &entity == hovered;
             button->pressed = &entity == pressed_ && &entity == hovered;
         }
     }
-    if (clicked) clicked(); // Copy the callback: it may rebuild the scene or hide this menu.
+    for (auto& action : callbacks) action(); // Copy callbacks before any of them can rebuild the scene.
     refresh(scene);
 }
 
