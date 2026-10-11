@@ -96,10 +96,16 @@ while `DEMO` exists. For your own source files, use **Add > Existing Item** on t
 editor project and save with **File > Save All**. This provides an editing context;
 `project.json` controls which files compile. The editor uses its latest language
 mode for IntelliSense, while GCC performs the actual C++26 compilation. VS 2022's
-IntelliSense parser does not understand C++26 reflection yet; reflection code can
-compile successfully despite IntelliSense diagnostics. Use **Build Only** in the
-Error List to view compiler errors. Reload the solution after changing its
-project file outside Visual Studio.
+parser cannot understand C++26 reflection or GCC's standard-library internals.
+`reflection.hpp` therefore exposes declarations of the public API when
+`__INTELLISENSE__` is defined, and keeps `<meta>` and the implementation in the
+compiler branch. IntelliSense uses Visual Studio's native headers; do not add GCC
+header directories to its include paths. Use `bindNativeFunctions<functionPointers...>`
+to bind existing C++ functions with ordinary C++ syntax, as the demo does.
+Namespace reflection expressions such as `bindNamespace<^^MyNamespace>(runtime)`
+need an `#if !defined(__INTELLISENSE__)` guard in host source files. GCC always
+compiles those bindings. Reload the solution and choose **Rescan Solution** after
+changing the project file outside Visual Studio.
 
 The default compiler tools are in `C:\msys64\ucrt64\bin`. For another MSYS2
 location, set the `Tiny3DToolchainDirectory` MSBuild property or pass

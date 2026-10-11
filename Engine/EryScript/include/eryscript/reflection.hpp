@@ -5,11 +5,31 @@
 #include <cmath>
 #include <concepts>
 #include <limits>
-#include <meta>
 #include <optional>
 #include <tuple>
 #include <typeindex>
 #include <unordered_set>
+
+#if defined(__INTELLISENSE__)
+// VS 2022 cannot parse C++26 reflection. Declarations keep the host API browsable;
+// only GCC compiles the implementation below, with its own standard-library headers.
+namespace eryscript {
+class Reflection {
+public:
+    Reflection();
+    ~Reflection();
+    Reflection(const Reflection&) = delete;
+    Reflection& operator=(const Reflection&) = delete;
+    void validate(std::function<void(const Object::Native&)> function);
+    void onError(std::function<void(const std::string&)> function);
+    template<class T> Value object(T* value);
+    template<auto... Functions> void bindFunctions(Runtime& runtime);
+    template<auto... Functions> void bindNativeFunctions(Runtime& runtime);
+    template<auto Scope> void bindNamespace(Runtime& runtime);
+};
+} // namespace eryscript
+#else
+#include <meta>
 
 namespace eryscript {
 namespace reflection_detail {
@@ -596,6 +616,11 @@ public:
         return reflection_detail::pack(value, context_);
     }
 
+    // Bind function pointers without exposing reflection expressions at the call site.
+    template<auto... Functions> void bindNativeFunctions(Runtime& runtime) {
+        bindFunctions<std::meta::reflect_function(*Functions)...>(runtime);
+    }
+
     // Select existing compiled functions, including standard-library overloads. Names/signatures are reflected.
     template<std::meta::info... Functions> void bindFunctions(Runtime& runtime) {
         reflection_detail::Overloads overloads;
@@ -675,3 +700,4 @@ private:
     std::shared_ptr<reflection_detail::Context> context_;
 };
 } // namespace eryscript
+#endif // __INTELLISENSE__

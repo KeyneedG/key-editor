@@ -106,14 +106,19 @@ reflected constructor; the host must keep them alive. `validate` allows a host
 to check that objects still exist, and `onError` reports callback exceptions.
 Destroying Reflection invalidates its native views and callbacks.
 
-For existing C++ functions, `reflection.bindFunctions<reflections...>(runtime)`
+For existing C++ functions, `reflection.bindNativeFunctions<functionPointers...>(runtime)`
 discovers names and signatures without writing binding lambdas. For example:
 
 ~~~cpp
-constexpr auto sine = std::meta::reflect_function(
-    *static_cast<double(*)(double)>(std::sin));
-reflection.bindFunctions<sine>(runtime); // Script can call sin(number).
+reflection.bindNativeFunctions<static_cast<double(*)(double)>(std::sin)>(runtime);
+// Script can call sin(number).
 ~~~
+
+The existing `bindFunctions<reflections...>` API also accepts `std::meta::info`
+values directly. Visual Studio 2022 uses an `__INTELLISENSE__` declaration branch
+in this header because its parser cannot understand `<meta>` or reflection syntax.
+When editing in Visual Studio, guard namespace bindings containing `^^` with
+`#if !defined(__INTELLISENSE__)`; GCC still compiles the real reflection code.
 
 Select a compiled overload with its C++ signature; already-instantiated C++
 templates can be selected the same way. Single-type member templates are

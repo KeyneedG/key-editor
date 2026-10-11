@@ -65,7 +65,9 @@ template<class F> void rejects(F&& function, const char* message) {
 void optimizedRuntime() {
     eryscript::Runtime runtime;
     eryscript::Reflection reflection;
+#if !defined(__INTELLISENSE__)
     reflection.bindNamespace<^^Example>(runtime);
+#endif
     runtime.load(R"ery(
 using Example
 var outer = 5
@@ -190,10 +192,11 @@ void standalone() {
     Example::Counter counter;
     eryscript::Runtime runtime;
     eryscript::Reflection reflection;
+#if !defined(__INTELLISENSE__)
     reflection.bindNamespace<^^Example>(runtime);
-    constexpr auto sine = std::meta::reflect_function(*static_cast<double(*)(double)>(std::sin));
-    constexpr auto squareRoot = std::meta::reflect_function(*static_cast<double(*)(double)>(std::sqrt));
-    reflection.bindFunctions<sine, squareRoot>(runtime);
+#endif
+    reflection.bindNativeFunctions<static_cast<double(*)(double)>(std::sin),
+        static_cast<double(*)(double)>(std::sqrt)>(runtime);
     runtime.load(R"ery(
 using Example
 var clicks = 0
@@ -255,7 +258,12 @@ mend
     { eryscript::Reflection temporary; expired = temporary.object(&counter); }
     rejects([&] { expired.object()->get("value"); }, "Expired native context was accessed");
     eryscript::Runtime expiredRuntime;
-    { eryscript::Reflection temporary; temporary.bindNamespace<^^Example>(expiredRuntime); }
+    {
+        eryscript::Reflection temporary;
+#if !defined(__INTELLISENSE__)
+        temporary.bindNamespace<^^Example>(expiredRuntime);
+#endif
+    }
     rejects([&] { expiredRuntime.load("using Example\n var counter = new Counter()"); }, "Expired constructor context was accessed");
 }
 void engine() {

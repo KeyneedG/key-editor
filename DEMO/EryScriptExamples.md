@@ -102,7 +102,9 @@ inline double total(const std::vector<double>& values) {
 }
 
 // Before the first engine frame:
+#if !defined(__INTELLISENSE__)
 script.reflection().bindNamespace<^^Gameplay>(script.runtime());
+#endif
 ~~~
 
 ~~~text
@@ -130,9 +132,7 @@ types visible in the namespace used to discover Entity.
 #include "eryscript/reflection.hpp"
 #include <cmath>
 
-constexpr auto sine = std::meta::reflect_function(
-    *static_cast<double(*)(double)>(std::sin));
-script.reflection().bindFunctions<sine>(script.runtime());
+script.reflection().bindNativeFunctions<static_cast<double(*)(double)>(std::sin)>(script.runtime());
 ~~~
 
 The script can now call sin(angle). The C++ cast chooses the double overload;
@@ -150,7 +150,9 @@ templates while running.
 Gameplay::Stats stats;
 eryscript::Runtime runtime;
 eryscript::Reflection reflection;
+#if !defined(__INTELLISENSE__)
 reflection.bindNamespace<^^Gameplay>(runtime);
+#endif
 runtime.load("method Heal\n heal(5)\n return health\nmend", reflection.object(&stats));
 double health = runtime.call("Heal").number(); // 105
 ~~~

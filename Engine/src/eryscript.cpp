@@ -25,7 +25,9 @@ eryscript::Reflection& EryScript::reflection() {
     if (!bindings_) {
         bindings_ = std::make_shared<detail::ScriptBindings>();
         auto* state = bindings_.get();
+#if !defined(__INTELLISENSE__)
         state->reflection.bindNamespace<^^tiny3d>(runtime_);
+#endif
         state->reflection.validate([state](const eryscript::Object::Native& object) {
             const void* target = object.address(typeid(Entity));
             const void* component = object.address(typeid(Component));

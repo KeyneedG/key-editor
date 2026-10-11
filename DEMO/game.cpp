@@ -237,8 +237,7 @@ method Update
     entity.transform.localRotation = Quaternion.fromEuler(new Vector3(0.3, age, 0.15))
 mend
 )ery");
-            constexpr auto sine = std::meta::reflect_function(*static_cast<double(*)(double)>(std::sin));
-            script.reflection().bindFunctions<sine>(script.runtime());
+            script.reflection().bindNativeFunctions<static_cast<double(*)(double)>(std::sin)>(script.runtime());
             collectibles_.push_back(scene_.entities.size());
             scene_.entities.push_back(std::move(item));
         }
