@@ -87,6 +87,9 @@ std::string serializeScene(const Scene& scene) {
             } else if (const auto* v = dynamic_cast<const Rigidbody*>(c)) {
                 data["type"] = "Rigidbody"; data["velocity"] = vector(v->velocity); data["mass"] = v->mass;
                 data["useGravity"] = v->useGravity; data["isKinematic"] = v->isKinematic;
+            } else if (const auto* v = dynamic_cast<const MonoBehaviour*>(c)) {
+                data["type"] = "MonoBehaviour"; data["script"] = behaviourName(*v); data["fields"] = v->saveFields();
+                data.at("fields").object();
             } else if (const auto* v = dynamic_cast<const EryScript*>(c)) {
                 data["type"] = "EryScript"; data["code"] = v->code;
                 data["runOnAwake"] = v->runOnAwake; data["runInUpdate"] = v->runInUpdate;
@@ -172,6 +175,8 @@ Scene deserializeScene(std::string_view source) {
             } else if (type == "Rigidbody") {
                 auto& v = e.addComponent<Rigidbody>(); added = &v; v.velocity = vector(c.at("velocity")); v.mass = number(c.at("mass"));
                 v.useGravity = c.at("useGravity").boolean(); v.isKinematic = c.at("isKinematic").boolean();
+            } else if (type == "MonoBehaviour") {
+                added = &e.addComponent(restoreBehaviour(c.at("script").string(), c.at("fields")));
             } else if (type == "EryScript") {
                 added = &e.addComponent<EryScript>(c.at("code").string(), c.at("runOnAwake").boolean(), c.at("runInUpdate").boolean());
             } else if (type == "Canvas") { auto& v = e.addComponent<Canvas>(); added = &v; v.camera = reference(c.at("camera"));
@@ -231,4 +236,5 @@ Scene loadScene(const std::filesystem::path& path) {
     if (in.bad()) throw std::runtime_error("Cannot read scene: " + path.string());
     return deserializeScene(source);
 }
+void Game::restoreScene(const std::string& source) { scene() = deserializeScene(source); }
 } // namespace tiny3d

@@ -1,5 +1,6 @@
 #include "tiny3d/editor.hpp"
 #include "tiny3d/json.hpp"
+#include "tiny3d/behaviour.hpp"
 #include <charconv>
 #include <fstream>
 #include <iomanip>
@@ -41,7 +42,9 @@ void Editor::inspect(Entity& root) {
     float contentHeight = 320;
     for (const auto& c : object.at("components").array()) {
         contentHeight += 66;
-        for (const auto& [key, v] : c.object()) if (key != "type" && key != "enabled") contentHeight += key == "code" ? 150 : 34;
+        const bool native = c.at("type").string() == "MonoBehaviour";
+        const auto& properties = native ? c.at("fields").object() : c.object();
+        for (const auto& [key, v] : properties) if (native || (key != "type" && key != "enabled")) contentHeight += key == "code" ? 150 : 34;
     }
     auto& list = scroll(root, 0, -10, 308, 450, contentHeight, 1);
     float y = 0;
@@ -85,11 +88,20 @@ void Editor::inspect(Entity& root) {
     const auto& components = object.at("components").array();
     for (std::size_t i = 0; i < components.size(); ++i) {
         const auto& c = components[i]; const auto type = c.at("type").string();
-        label(list, -22, y, type, 1.4f);
+        const bool native = type == "MonoBehaviour";
+        const std::string heading = native ? "C++: " + c.at("script").string() : type;
+        label(list, -22, y, heading, 1.4f);
         button(list, 111, y, 46, c.at("enabled").boolean() ? "On" : "Off", [editComponent, i, c] { editComponent(i, "enabled", !c.at("enabled").boolean()); }); y -= 32;
-        for (const auto& [key, value] : c.object()) {
-            if (key == "type" || key == "enabled") continue;
-            const auto set = [editComponent, i, key](J v) { editComponent(i, key, std::move(v)); };
+        if (native && std::none_of(behaviourTypes().begin(), behaviourTypes().end(), [&](const auto& t) { return t.name == c.at("script").string(); })) {
+            label(list, 0, y, "Missing script - rebuild project", 1.1f); y -= 34;
+        }
+        const auto& properties = native ? c.at("fields").object() : c.object();
+        for (const auto& [key, value] : properties) {
+            if (!native && (key == "type" || key == "enabled")) continue;
+            const auto set = [editComponent, i, key, c, native](J v) {
+                if (native) { auto fields = c.at("fields"); fields[key] = std::move(v); editComponent(i, "fields", std::move(fields)); }
+                else editComponent(i, key, std::move(v));
+            };
             label(list, -93, y, key.size() > 13 ? key.substr(0, 13) : key, 1.05f);
             if (std::holds_alternative<bool>(value.data)) {
                 button(list, 59, y, 150, value.boolean() ? "True" : "False", [set, value] { set(!value.boolean()); });
@@ -103,9 +115,9 @@ void Editor::inspect(Entity& root) {
                 } else field(list, 59, y, 150, value.string(), [set](const std::string& text) { set(text); });
             } else if (std::holds_alternative<J::Array>(value.data)) {
                 for (std::size_t a = 0; a < value.array().size(); ++a) {
-                    field(list, -20 + float(a) * 64, y, 60, number(value.at(a).number()), [this, selected, i, key, a](const std::string& text) {
+                    field(list, -20 + float(a) * 64, y, 60, number(value.at(a).number()), [this, selected, i, key, a, native](const std::string& text) {
                         auto doc = json::parse(current_); auto& c = std::get<J::Array>(std::get<J::Array>(doc["entities"].data).at(selected)["components"].data).at(i);
-                        std::get<J::Array>(c[key].data).at(a) = number(text);
+                        std::get<J::Array>((native ? c["fields"][key] : c[key]).data).at(a) = number(text);
                         auto source = json::stringify(doc); change([&](Scene& scene) { scene = deserializeScene(source); });
                     });
                 }
@@ -124,7 +136,7 @@ void Editor::inspect(Entity& root) {
             });
             y -= 34;
         }
-        button(list, 0, y, 280, "Remove " + type, [this, selected, i] {
+        button(list, 0, y, 280, "Remove " + heading, [this, selected, i] {
             auto doc = json::parse(current_); auto& components = std::get<J::Array>(std::get<J::Array>(doc["entities"].data).at(selected)["components"].data);
             components.erase(components.begin() + i); auto source = json::stringify(doc);
             change([&](Scene& scene) { scene = deserializeScene(source); });
@@ -166,10 +178,18 @@ void Editor::dialog(Entity& root) {
     } else if (dialog_ == Dialog::AddObject || dialog_ == Dialog::AddComponent) {
         const bool object = dialog_ == Dialog::AddObject;
         label(box, 0, object ? 140 : 240, object ? "Create Object" : "Add Component", 2);
-        const std::vector<std::string> types = object ? std::vector<std::string>{"Empty", "Cube", "Plane", "Camera"} :
+        std::vector<std::string> types = object ? std::vector<std::string>{"Empty", "Cube", "Plane", "Camera"} :
             std::vector<std::string>{"MeshRenderer", "Camera", "BoxCollider", "SphereCollider", "CapsuleCollider", "Rigidbody", "EryScript", "Canvas", "Image", "SimpleText", "Button", "ScrollRect", "InputField"};
+        if (!object) for (const auto& type : behaviourTypes()) types.push_back("C++: " + type.name);
+        Entity* choices = &box;
+        if (!object) {
+            auto& viewport = panel(box, 0, -8, 540, 370);
+            auto& scrolling = viewport.addComponent<ScrollRect>();
+            choices = &element(viewport, 0, 170);
+            scrolling.content = choices; scrolling.contentHeight = float((types.size() + 1) / 2) * 46;
+        }
         for (std::size_t i = 0; i < types.size(); ++i) {
-            const auto type = types[i]; button(box, i % 2 ? 136 : -136, (object ? 70.f : 172.f) - float(i / 2) * 46, 248, type, [this, object, type] {
+            const auto type = types[i]; button(*choices, i % 2 ? 136 : -136, (object ? 70.f : 0.f) - float(i / 2) * 46, 248, type, [this, object, type] {
                 if (object) addObject(type); else if (selected_) addComponent(*selected_, type); dialog_ = Dialog::None; rebuild_ = true;
             });
         }

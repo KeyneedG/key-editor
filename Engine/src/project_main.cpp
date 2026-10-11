@@ -118,8 +118,12 @@ int main(int argc, char** argv) {
             initial = tiny3d::deserializeScene(tiny3d::serializeScene(source->scene()));
         }
 #endif
+        tiny3d::editor::Editor::PlayFactory playFactory;
+#ifndef TINY3D_SCENE_PROJECT
+        if (directory == std::filesystem::path(TINY3D_PROJECT_DIRECTORY)) playFactory = [] { return tiny3d::createGame(); };
+#endif
         std::unique_ptr<tiny3d::Game> game = std::make_unique<tiny3d::editor::Editor>(std::move(initial),
-            TINY3D_ENGINE_DIRECTORY, directory, TINY3D_CONFIG_FILE);
+            TINY3D_ENGINE_DIRECTORY, directory, TINY3D_CONFIG_FILE, std::move(playFactory));
 #else
         if (!directory.empty()) std::filesystem::current_path(directory);
 #ifdef TINY3D_SCENE_PROJECT

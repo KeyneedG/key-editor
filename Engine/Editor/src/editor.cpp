@@ -67,8 +67,9 @@ bool project(Vector3 world, const Transform& camera, Vector3& screen) {
 }
 }
 
-Editor::Editor(Scene initial, fs::path engineDirectory, fs::path projectDirectory, fs::path configFile)
+Editor::Editor(Scene initial, fs::path engineDirectory, fs::path projectDirectory, fs::path configFile, PlayFactory playFactory)
     : content_(std::move(initial)), engine_(fs::absolute(engineDirectory)), config_(std::move(configFile)), project_(std::move(projectDirectory)) {
+    playFactory_ = std::move(playFactory);
     fs::create_directories(engine_ / "Projects");
     camera_.localPosition = {0, 3, -9}; camera_.localRotation = Quaternion::fromEuler({cameraPitch_, cameraYaw_, 0});
     if (!project_.empty()) {
@@ -89,12 +90,13 @@ Editor::Editor(Scene initial, fs::path engineDirectory, fs::path projectDirector
         auto& e = content_.entities[i];
         if (e.name == "Object") e.name = e.tag != "Untagged" ? e.tag : "Object " + std::to_string(i + 1);
     }
+    factoryProject_ = project_;
     current_ = saved_ = serializeScene(content_);
     rebuild();
 }
 std::string Editor::title() const {
     return "EryEngine | " + (project_.empty() ? "No project" : project_.filename().string()) + " | " +
-        (scenePath_.empty() ? "Untitled" : scenePath_.filename().string()) + (dirty() ? " *" : "");
+        (scenePath_.empty() ? "Untitled" : scenePath_.filename().string()) + (dirty() ? " *" : "") + (playing() ? playPaused_ ? " | Paused" : " | Playing" : "");
 }
 void Editor::guard(const std::function<void()>& action) {
     try { action(); } catch (const std::exception& e) { status_ = e.what(); rebuild_ = true; }
@@ -110,6 +112,7 @@ void Editor::replace(Scene scene, const fs::path& path) {
     undo_.clear(); redo_.clear(); selected_.reset(); offsets_.fill(0); dragging_ = -1; rebuild_ = true;
 }
 void Editor::change(const std::function<void(Scene&)>& action) {
+    requireEditing();
     const std::string before = current_;
     try { action(content_); current_ = serializeScene(content_); deserializeScene(current_); }
     catch (...) { content_ = deserializeScene(before); rebuild_ = true; throw; }
@@ -119,11 +122,13 @@ void Editor::change(const std::function<void(Scene&)>& action) {
     rebuild_ = true;
 }
 void Editor::undo() {
+    requireEditing();
     if (undo_.empty()) return;
     auto next = deserializeScene(undo_.back()); redo_.push_back(current_); current_ = undo_.back(); undo_.pop_back();
     content_ = std::move(next); if (selected_ && *selected_ >= content_.entities.size()) selected_.reset(); rebuild_ = true;
 }
 void Editor::redo() {
+    requireEditing();
     if (redo_.empty()) return;
     auto next = deserializeScene(redo_.back()); undo_.push_back(current_); current_ = redo_.back(); redo_.pop_back();
     content_ = std::move(next); rebuild_ = true;
@@ -134,6 +139,7 @@ void Editor::rememberProject() {
     settings["project"] = fs::relative(project_, config_.parent_path()).generic_string(); writeJson(config_, settings);
 }
 void Editor::newProject(const std::string& name) {
+    requireEditing();
     validateName(name); const auto target = engine_ / "Projects" / name;
     if (fs::exists(target)) throw std::runtime_error("A project with that name already exists");
     fs::create_directories(target / "Assets");
@@ -160,6 +166,7 @@ void Editor::newProject(const std::string& name) {
     replace(deserializeScene(current_), firstScene); rememberProject(); dialog_ = Dialog::None; status_ = "Created project " + name;
 }
 void Editor::openProject(const fs::path& directory) {
+    requireEditing();
     const auto target = fs::canonical(directory);
     if (!fs::is_directory(target / "Assets")) throw std::runtime_error("Select a project folder containing Assets");
     const auto manifest = readJson(target / "project.json");
@@ -177,6 +184,7 @@ void Editor::openProject(const fs::path& directory) {
     rememberProject(); dialog_ = Dialog::None; status_ = "Opened " + target.filename().string();
 }
 void Editor::newScene(const std::string& name) {
+    requireEditing();
     if (project_.empty()) throw std::runtime_error("Create or open a project first");
     validateName(name); fs::create_directories(assets_);
     const auto path = assets_ / (name.ends_with(".json") ? name : name + ".scene.json");
@@ -186,10 +194,12 @@ void Editor::newScene(const std::string& name) {
     saveScene(next, path); replace(std::move(next), path); folder_ = assets_; dialog_ = Dialog::None; status_ = "Created " + path.filename().string();
 }
 void Editor::openScene(const fs::path& path) {
+    requireEditing();
     if (!inside(path, assets_)) throw std::runtime_error("Select a scene inside the project's Assets folder");
     auto next = loadScene(path); replace(std::move(next), path); status_ = "Opened " + path.filename().string();
 }
 void Editor::save() {
+    requireEditing();
     if (project_.empty()) throw std::runtime_error("Create or open a project first");
     fs::create_directories(assets_);
     if (scenePath_.empty()) {
@@ -232,7 +242,8 @@ void Editor::addComponent(std::size_t object, const std::string& type) {
             if (!e.getComponent<Image>()) e.addComponent<Image>();
             auto& s = e.addComponent<ScrollRect>(); auto& child = scene.entities.emplace_back(); child.name = "Content";
             child.setParent(&e, false); s.content = &child;
-        } else throw std::runtime_error("Unknown component type");
+        } else if (type.starts_with("C++: ")) addBehaviour(e, type.substr(5));
+        else throw std::runtime_error("Unknown component type");
     });
     dialog_ = Dialog::None;
 }
@@ -278,6 +289,7 @@ void Editor::rebuild() {
     auto& camera = view_.entities.emplace_back(); camera.transform = camera_; camera.addComponent<Camera>().layers = layerMask(0);
     viewportCamera_ = &camera;
     auto& gizmoCamera = view_.entities.emplace_back(); gizmoCamera.transform = camera_;
+    gizmoCamera_ = &gizmoCamera;
     auto& gc = gizmoCamera.addComponent<Camera>(); gc.layers = layerMask(30); gc.depth = 1; gc.clearColor = false;
     gizmos();
     auto& uiCamera = view_.entities.emplace_back(); uiCamera.layer = 31;
@@ -288,6 +300,7 @@ void Editor::rebuild() {
     button(top, -594, 0, 76, "File", [this] { menu_ = menu_ == "File" ? "" : "File"; rebuild_ = true; });
     button(top, -510, 0, 76, "Edit", [this] { menu_ = menu_ == "Edit" ? "" : "Edit"; rebuild_ = true; });
     button(top, -426, 0, 76, "Help", [this] { menu_ = menu_ == "Help" ? "" : "Help"; rebuild_ = true; });
+    button(top, -280, 0, 110, "Play F5", [this] { play(); });
     label(top, 360, 0, "ERYENGINE EDITOR", 1.6f);
     auto& hierarchy = panel(root, -530, 110, 220, 508); label(hierarchy, -12, 235, "Hierarchy");
     button(hierarchy, 85, 235, 30, "+", [this] { dialog_ = Dialog::AddObject; rebuild_ = true; });
@@ -359,20 +372,35 @@ void Editor::projectPanel(Entity& root) {
     for (const auto& e : fs::directory_iterator(folder_)) if (!e.is_symlink() && e.path().filename() != "build" && e.path().filename() != ".vs") entries.push_back(e);
     std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
         if (a.is_directory() != b.is_directory()) return a.is_directory();
-        return a.path().filename() < b.path().filename();
+        return a.path() < b.path();
     });
     auto& list = scroll(root, 0, -10, 1252, 170, float(((entries.size() + 3) / 4 + 1) * 32), 2);
     if (folder_ != browserRoot) button(list, -465, 0, 298, ".. Parent folder", [this] { folder_ = folder_.parent_path(); offsets_[2] = 0; scrolls_[2]->getComponent<ScrollRect>()->offset = 0; rebuild_ = true; });
     for (std::size_t i = 0; i < entries.size(); ++i) {
         const auto path = entries[i].path(); const bool directory = entries[i].is_directory();
+        const bool cpp = !directory && isCppScript(path);
+        const auto display = path.parent_path() == folder_ ? path.filename().string() : fs::relative(path, project_).generic_string();
         button(list, -465 + float(i % 4) * 310, -float(i / 4 + 1) * 32, 298,
-            shortText((directory ? "[DIR] " : "") + path.filename().string(), 34), [this, path, directory] {
+            shortText((directory ? "[DIR] " : cpp ? "[C++] " : "") + display, 34), [this, path, directory, cpp] {
                 if (clickedAsset_ == path && time_ - lastClick_ < .45f) {
                     if (directory) { folder_ = path; offsets_[2] = 0; scrolls_[2]->getComponent<ScrollRect>()->offset = 0; rebuild_ = true; }
+                    else if (cpp) {
+                        std::vector<std::string> types;
+                        for (const auto& type : behaviourTypes()) {
+                            std::error_code error;
+                            if (!type.source.empty() && fs::equivalent(path, type.source, error)) types.push_back(type.name);
+                        }
+                        if (selected_ && types.size() == 1) {
+                            addComponent(*selected_, "C++: " + types.front()); status_ = "Attached " + types.front();
+                        } else if (selected_ && types.size() > 1) {
+                            dialog_ = Dialog::AddComponent; status_ = "Choose a compiled C++ behaviour";
+                        } else status_ = types.empty() ? "C++: " + path.filename().string() + " | Rebuild after adding/registering behaviours" :
+                            "Select an object, then double-click this C++ script to attach it";
+                    }
                     else if (path.extension() == ".json") request([this, path] { openScene(path); });
                     else status_ = "Asset: " + path.filename().string();
                     clickedAsset_.clear();
-                } else { clickedAsset_ = path; lastClick_ = time_; status_ = "Double-click folders or scene JSON to open"; }
+                } else { clickedAsset_ = path; lastClick_ = time_; status_ = cpp ? "C++: " + fs::relative(path, project_).generic_string() + " | Double-click to attach compiled behaviour" : "Double-click folders or scene JSON to open"; }
                 rebuild_ = true;
             });
     }
@@ -410,32 +438,45 @@ float hitMesh(const Entity& entity, Vector3 origin, Vector3 direction) {
 }
 }
 
-void Editor::gizmos() {
+void Editor::refreshViewport() {
+    // Navigation changes only these transforms; retain scene/UI objects and cached meshes.
+    if (viewportCamera_) viewportCamera_->transform = camera_;
+    if (gizmoCamera_) gizmoCamera_->transform = camera_;
     if (!selected_ || *selected_ >= content_.entities.size()) return;
     const auto& transform = content_.entities[*selected_].transform;
-    Vector3 center = transform.position();
+    const Vector3 center = transform.position();
     const float size = std::max(.3f, length(center - camera_.position()) * .09f);
     const Quaternion basis = space_ == Space::Local ? transform.rotation() : Quaternion{};
+    for (auto* handle : handles_) if (handle) {
+        handle->transform.localPosition = center;
+        handle->transform.localRotation = basis;
+        handle->transform.localScale = {size, size, size};
+    }
+}
+
+void Editor::gizmos() {
+    if (!selected_ || *selected_ >= content_.entities.size()) return;
     for (int i = 0; i < 3; ++i) {
         Vector3 direction = axes[i];
         auto mesh = std::make_shared<Mesh>();
+        // Unit geometry stays cached as camera distance changes; size is a transform.
         if (tool_ == Tool::Rotate) {
             Vector3 u = axes[(i + 1) % 3], v = axes[(i + 2) % 3];
             for (int segment = 0; segment < 48; ++segment) {
                 float a = segment * 2 * pi / 48, b = (segment + 1) * 2 * pi / 48;
-                Vector3 p = (u * std::cos(a) + v * std::sin(a)) * size;
-                Vector3 q = (u * std::cos(b) + v * std::sin(b)) * size;
-                appendBox(*mesh, (p + q) * .5f, {size * .035f, length(q - p) + size * .02f, size * .035f}, alignY(q - p));
+                Vector3 p = u * std::cos(a) + v * std::sin(a);
+                Vector3 q = u * std::cos(b) + v * std::sin(b);
+                appendBox(*mesh, (p + q) * .5f, {.035f, length(q - p) + .02f, .035f}, alignY(q - p));
             }
         } else {
-            appendBox(*mesh, direction * (size * .5f), {size * .035f, size, size * .035f}, alignY(direction));
+            appendBox(*mesh, direction * .5f, {.035f, 1, .035f}, alignY(direction));
             const float tip = tool_ == Tool::Scale ? .16f : .10f;
-            appendBox(*mesh, direction * size, {size * tip, size * tip, size * tip});
+            appendBox(*mesh, direction, {tip, tip, tip});
         }
-        auto& handle = view_.entities.emplace_back(); handle.layer = 30; handle.transform.localPosition = center;
-        handle.transform.localRotation = basis;
+        auto& handle = view_.entities.emplace_back(); handle.layer = 30;
         auto& visual = handle.addComponent<MeshRenderer>(mesh, colors[i]); visual.unlit = true; handles_[i] = &handle;
     }
+    refreshViewport();
 }
 
 void Editor::viewportInput(float seconds, const Input& input) {
@@ -481,23 +522,23 @@ void Editor::viewportInput(float seconds, const Input& input) {
             cameraYaw_ = std::remainder(cameraYaw_ + input.mouseDeltaX * .003f, 2 * pi);
             cameraPitch_ = std::remainder(cameraPitch_ + input.mouseDeltaY * .003f, 2 * pi);
             camera_.localRotation = Quaternion::fromEuler({cameraPitch_, cameraYaw_, 0});
-            rebuild_ = true;
         }
         const auto a = [&](Key positive, Key negative) { return float(input.held(positive)) - float(input.held(negative)); };
         const auto movement = rotate(Vector3{a(Key::D, Key::A), a(Key::E, Key::Q), a(Key::W, Key::S)}, camera_.rotation()) * (seconds * (input.held(Key::Shift) ? 18 : 6));
-        if (length(movement) > 0) { camera_.localPosition = camera_.localPosition + movement; rebuild_ = true; }
+        if (length(movement) > 0) camera_.localPosition = camera_.localPosition + movement;
     } else {
         if (input.pressed(Key::W) && !input.held(Key::Control)) { tool_ = Tool::Move; rebuild_ = true; }
         if (input.pressed(Key::E)) { tool_ = Tool::Rotate; rebuild_ = true; }
         if (input.pressed(Key::R)) { tool_ = Tool::Scale; rebuild_ = true; }
     }
-    if (looking_) return;
+    if (looking_) { refreshViewport(); return; }
     if (input.pressed(Key::F) && selected_) {
         const auto& t = content_.entities[*selected_].transform;
         const float distance = std::max(4.f, length(t.lossyScale()) * 2);
-        camera_.localPosition = t.position() - camera_.forward() * distance; rebuild_ = true;
+        camera_.localPosition = t.position() - camera_.forward() * distance;
     }
-    if (over && input.mouseWheel != 0) { camera_.localPosition = camera_.localPosition + camera_.forward() * input.mouseWheel; rebuild_ = true; }
+    if (over && input.mouseWheel != 0) camera_.localPosition = camera_.localPosition + camera_.forward() * input.mouseWheel;
+    refreshViewport();
     if (!over || !input.pressed(MouseButton::Left)) return;
     Vector3 direction = rotate(normalized(Vector3{(mouse.x / 640 - 1) * std::tan(pi / 6) * 1280 / 800,
         (1 - mouse.y / 400) * std::tan(pi / 6), 1}), camera_.rotation());
@@ -571,9 +612,12 @@ void Editor::frameRendered(const graphics::FrameStats& frame) {
 
 void Editor::update(float seconds, const Input& input) {
     time_ += seconds;
+    if (playing()) { guard([&] { updatePlay(seconds, input); }); return; }
     guard([&] {
         const bool wasEditing = ui_.editingText();
+        if (input.focused && input.pressed(Key::F5) && !wasEditing && dialog_ == Dialog::None) { play(); return; }
         ui_.update(view_, input);
+        if (playing()) return;
         // Retain pressed controls until release when committing a field changed the scene.
         if (rebuild_ && (!input.held(MouseButton::Left) || dragging_ >= 0)) rebuild();
         viewportInput(seconds, input);

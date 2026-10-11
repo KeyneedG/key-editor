@@ -201,6 +201,22 @@ void checks(RenderBackend& gpu) {
     compare(gpu, editor.scene(), "Editor scene and panels", .02);
     editor.addObject("Cube"); editor.update(0, Input{});
     compare(gpu, editor.scene(), "Inspector and gizmos", .02);
+    for (const auto* tool : {"Move W", "Rotate E", "Scale R"}) {
+        for (auto& e : editor.scene().entities) if (auto* button = e.getComponent<Button>())
+            for (std::size_t i = 0; i < e.childCount(); ++i)
+                if (auto* text = e.getChild(i)->getComponent<SimpleText>(); text && text->text == tool) button->onClick();
+        editor.update(0, Input{}); gpu.render(editor.scene(), {}); // Warm the tool's geometry cache.
+        Input flight; flight.focused = true; flight.renderWidth = 1280; flight.renderHeight = 800;
+        flight.viewport = {0, 0, 1280, 800}; flight.mouseX = 500; flight.mouseY = 300;
+        flight.set(MouseButton::Right, true); editor.update(.016f, flight);
+        for (int frame = 0; frame < 3; ++frame) {
+            flight.beginFrame(); flight.mouseDeltaX = 4; flight.mouseDeltaY = -3; flight.set(Key::W, true);
+            editor.update(.016f, flight); gpu.render(editor.scene(), {});
+            check(gpu.stats().meshUploads == 0, "Camera navigation uploaded new scene/UI/gizmo geometry");
+        }
+        compare(gpu, editor.scene(), "Cached gizmos after camera navigation", .02);
+        editor.update(0, Input{});
+    }
     editor.frameRendered({gpu.stats(), gpu.name(), gpu.width(), gpu.height(), .02f, .001f, .002f, .003f});
     Entity* statsButton = nullptr;
     for (auto& e : editor.scene().entities) if (e.getComponent<Button>()) for (std::size_t i = 0; i < e.childCount(); ++i)

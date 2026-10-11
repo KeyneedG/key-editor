@@ -45,6 +45,9 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="include\tiny3d\engine.hpp" />
+    <ClInclude Include="include\tiny3d\behaviour.hpp" />
+    <ClInclude Include="..\DEMO\Assets\Scripts\PlayerMovement.hpp" Condition="Exists('$(ProjectDir)..\DEMO\Assets\Scripts\PlayerMovement.hpp')" />
+    <ClInclude Include="..\DEMO\Assets\Scripts\CollectorController.hpp" Condition="Exists('$(ProjectDir)..\DEMO\Assets\Scripts\CollectorController.hpp')" />
     <ClInclude Include="include\tiny3d\math.hpp" />
     <ClInclude Include="include\tiny3d\physics.hpp" />
     <ClInclude Include="include\tiny3d\project.hpp" />
@@ -59,6 +62,11 @@
     <ClInclude Include="EryScript\include\eryscript\reflection.hpp" />
     <ClCompile Include="..\DEMO\game.cpp" Condition="Exists('$(ProjectDir)..\DEMO\game.cpp')" />
     <ClCompile Include="src\renderer.cpp" />
+    <ClCompile Include="src\behaviour.cpp" />
+    <ClCompile Include="..\DEMO\Assets\Scripts\PlayerMovement.cpp" Condition="Exists('$(ProjectDir)..\DEMO\Assets\Scripts\PlayerMovement.cpp')" />
+    <ClCompile Include="..\DEMO\Assets\Scripts\CollectorController.cpp" Condition="Exists('$(ProjectDir)..\DEMO\Assets\Scripts\CollectorController.cpp')" />
+    <ClCompile Include="tests\behaviour_checks.cpp" />
+    <ClCompile Include="..\DEMO\Assets\Scripts\Spin.cpp" Condition="Exists('$(ProjectDir)..\DEMO\Assets\Scripts\Spin.cpp')" />
     <ClCompile Include="src\platform.cpp" />
     <ClCompile Include="src\physics.cpp" />
     <ClCompile Include="src\ui.cpp" />
@@ -69,6 +77,8 @@
     <ClCompile Include="Editor\src\editor.cpp" />
     <ClCompile Include="Editor\src\panels.cpp" />
     <ClCompile Include="Editor\src\dialogs.cpp" />
+    <ClCompile Include="Editor\src\play.cpp" />
+    <ClCompile Include="tests\demo_checks.cpp" />
     <ClCompile Include="tests\editor_checks.cpp" />
     <ClCompile Include="tests\d3d11_checks.cpp" />
     <ClCompile Include="Rendering\Direct3D11\src\d3d11.cpp" />

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tiny3d/engine.hpp"
+#include "tiny3d/behaviour.hpp"
 #include "eryscript/eryscript.hpp"
 
 namespace eryscript { class Reflection; }

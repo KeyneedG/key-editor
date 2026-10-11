@@ -38,9 +38,33 @@ struct Mesh {
 Mesh cube();   // Unit cube, centered at the origin.
 Mesh plane();  // Unit square on XZ, facing +Y.
 
+struct Entity;
+using GameObject = Entity;
+
 struct Component {
     bool enabled = true;
+    Component() = default;
+    Component(const Component&) = delete;
+    Component& operator=(const Component&) = delete;
     virtual ~Component() = 0;
+    // Available as soon as addComponent returns, before the first script tick.
+    Entity& gameObject();
+    const Entity& gameObject() const;
+    Transform& transform();
+    const Transform& transform() const;
+    std::string& name();
+    const std::string& name() const;
+    std::string& tag();
+    const std::string& tag() const;
+    std::uint8_t& layer();
+    const std::uint8_t& layer() const;
+    template<class T> requires std::derived_from<T, Component> T* getComponent();
+    template<class T> requires std::derived_from<T, Component> const T* getComponent() const;
+    template<class T, class... Args> requires std::derived_from<T, Component> && std::constructible_from<T, Args...>
+    T& addComponent(Args&&... args);
+private:
+    friend struct Entity;
+    Entity* owner_ = nullptr;
 };
 inline Component::~Component() = default;
 
@@ -85,6 +109,7 @@ struct Entity {
         name = std::move(entity.name);
         tag = std::move(entity.tag);
         components = std::move(entity.components);
+        for (auto& component : components) component->owner_ = this;
         parent_ = entity.parent_;
         transform.parent_ = parent_ ? &parent_->transform : nullptr;
         children_ = std::move(entity.children_);
@@ -145,8 +170,15 @@ struct Entity {
     T& addComponent(Args&&... args) {
         auto component = std::make_unique<T>(std::forward<Args>(args)...);
         T& result = *component;
-        components.push_back(std::move(component));
+        addComponent(std::move(component));
         return result;
+    }
+
+    Component& addComponent(std::unique_ptr<Component> component) {
+        if (!component) throw std::invalid_argument("Cannot attach a null component");
+        component->owner_ = this;
+        components.push_back(std::move(component));
+        return *components.back();
     }
 
     template<class T>
@@ -175,6 +207,29 @@ private:
     Entity* parent_ = nullptr;
     std::vector<Entity*> children_;
 };
+
+inline Entity& Component::gameObject() {
+    if (!owner_) throw std::logic_error("Component is not attached to a game object");
+    return *owner_;
+}
+inline const Entity& Component::gameObject() const {
+    if (!owner_) throw std::logic_error("Component is not attached to a game object");
+    return *owner_;
+}
+inline Transform& Component::transform() { return gameObject().transform; }
+inline const Transform& Component::transform() const { return gameObject().transform; }
+inline std::string& Component::name() { return gameObject().name; }
+inline const std::string& Component::name() const { return gameObject().name; }
+inline std::string& Component::tag() { return gameObject().tag; }
+inline const std::string& Component::tag() const { return gameObject().tag; }
+inline std::uint8_t& Component::layer() { return gameObject().layer; }
+inline const std::uint8_t& Component::layer() const { return gameObject().layer; }
+template<class T> requires std::derived_from<T, Component> T* Component::getComponent() { return gameObject().getComponent<T>(); }
+template<class T> requires std::derived_from<T, Component> const T* Component::getComponent() const { return gameObject().getComponent<T>(); }
+template<class T, class... Args> requires std::derived_from<T, Component> && std::constructible_from<T, Args...>
+T& Component::addComponent(Args&&... args) {
+    return gameObject().addComponent<T>(std::forward<Args>(args)...);
+}
 
 struct Scene {
     // Appending entities does not invalidate parent pointers or entity references.
@@ -323,8 +378,10 @@ public:
     // Mutable access for script components; existing const accessors remain compatible.
     virtual Scene& scene() { return const_cast<Scene&>(std::as_const(*this).scene()); }
     virtual const Scene& scene() const = 0;
+    // Replace runtime content from an editor play snapshot.
+    virtual void restoreScene(const std::string& source);
     virtual std::string title() const { return "Tiny3D"; }
-    virtual bool captureMouse() const { return false; }
+    virtual bool captureMouse() const;
     virtual bool shouldQuit() const { return false; }
     virtual ScreenSettings screenSettings() const { return {}; }
     virtual bool executeScripts() const { return true; }

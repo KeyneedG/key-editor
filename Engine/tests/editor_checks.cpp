@@ -191,6 +191,70 @@ void cameraChecks(const fs::path& scratch) {
     check(!editor.dirty(), "Editor camera movement dirtied the scene");
 }
 
+void cameraNavigationChecks(const fs::path& scratch) {
+    Scene initial;
+    auto& target = initial.entities.emplace_back(); target.name = "Target";
+    target.transform.localPosition = {2, 1, 0};
+    target.transform.localRotation = Quaternion::fromEuler({.2f, .4f, .1f});
+    target.addComponent<MeshRenderer>(std::make_shared<Mesh>(cube()));
+    editor::Editor editor(std::move(initial), scratch);
+    clickButton(editor, "0: Target"); clickButton(editor, "World");
+    const auto content = serializeScene(editor.content());
+    const auto camera = [&](unsigned layer) -> const Entity& {
+        for (auto& e : editor.scene().entities)
+            if (auto* c = e.getComponent<Camera>(); c && c->enabled && c->layers == layerMask(layer)) return e;
+        throw std::runtime_error("Navigation camera missing");
+    };
+    for (const auto* tool : {"Move W", "Rotate E", "Scale R"}) {
+        clickButton(editor, tool);
+        struct Visual { std::size_t entity, component; std::shared_ptr<const Mesh> mesh; };
+        std::vector<Visual> cached;
+        const auto count = editor.scene().entities.size();
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto& e = editor.scene().entities[i];
+            for (std::size_t c = 0; c < e.components.size(); ++c)
+                if (auto* visual = dynamic_cast<const MeshRenderer*>(e.components[c].get())) cached.push_back({i, c, visual->mesh});
+        }
+        const auto verify = [&] {
+            check(editor.scene().entities.size() == count, "Camera navigation recreated editor entities");
+            for (const auto& v : cached) {
+                const auto* visual = dynamic_cast<const MeshRenderer*>(editor.scene().entities[v.entity].components.at(v.component).get());
+                check(visual && visual->mesh == v.mesh, "Camera navigation recreated scene, UI, or gizmo meshes");
+            }
+            const auto& world = camera(0).transform;
+            const auto& gizmo = camera(30).transform;
+            check(close(world.position(), gizmo.position()) && close(world.forward(), gizmo.forward()) && close(world.up(), gizmo.up()),
+                "Gizmo camera did not follow viewport navigation");
+            const auto& selected = editor.content().entities[0].transform;
+            const float size = std::max(.3f, length(selected.position() - world.position()) * .09f);
+            unsigned handles = 0;
+            for (const auto& e : editor.scene().entities) if (e.layer == 30) {
+                ++handles;
+                check(close(e.transform.position(), selected.position()) && close(e.transform.localScale, {size, size, size}),
+                    "Cached gizmo size or position did not follow camera distance");
+                check(close(e.transform.right(), selected.right()) && close(e.transform.up(), selected.up()),
+                    "Camera navigation changed local gizmo orientation");
+            }
+            check(handles == 3, "Navigation lost transform handles");
+        };
+        auto input = pointer(500, 300); input.set(MouseButton::Right, true); editor.update(.016f, input); verify();
+        for (int frame = 0; frame < 6; ++frame) {
+            input.beginFrame(); input.mouseDeltaX = 12; input.mouseDeltaY = -7;
+            input.set(Key::W, true); input.set(Key::Shift, frame >= 3);
+            editor.update(.016f, input); verify();
+        }
+        editor.update(.016f, pointer(500, 300)); verify();
+        const auto beforeWheel = camera(0).transform.position();
+        auto wheel = pointer(500, 300); wheel.mouseWheel = 2; editor.update(.016f, wheel); verify();
+        check(close(camera(0).transform.position(), beforeWheel + camera(0).transform.forward() * 2), "Wheel navigation did not move camera");
+        auto focus = pointer(0, 0); focus.set(Key::F, true); editor.update(.016f, focus); verify();
+        check(close(camera(0).transform.position(), editor.content().entities[0].transform.position() - camera(0).transform.forward() * 4),
+            "Framing selection did not move the cached cameras");
+        wheel.mouseWheel = 3; editor.update(.016f, wheel); verify(); // Exercise the minimum handle size.
+    }
+    check(!editor.dirty() && serializeScene(editor.content()) == content, "Navigation changed the editable scene");
+}
+
 void transformSpaceChecks(const fs::path& scratch) {
     Scene scene; auto& parent = scene.entities.emplace_back(); parent.name = "Parent";
     parent.transform.localRotation = Quaternion::fromEuler({.2f, .6f, .35f}); parent.transform.localScale = {1.4f, .8f, 1.2f};
@@ -358,7 +422,7 @@ void editorChecks(const fs::path& scratch) {
         }
         check(first && camera, "Tool handle missing");
         auto mesh = first->getComponent<MeshRenderer>()->mesh;
-        Vector3 local{size, 0, 0};
+        Vector3 local{1, 0, 0};
         if (tool.starts_with("Rotate")) { local = {}; for (int i = 0; i < 8; ++i) local = local + mesh->vertices[i] * .125f; }
         auto v = inverseRotate(first->transform.point(local) - camera->transform.position(), camera->transform.rotation());
         int x = int((v.x / (v.z * std::tan(pi / 6) * 1280 / 800) + 1) * 640);
@@ -384,7 +448,7 @@ int main() {
     try {
         applicationChecks(); sceneChecks(); uiChecks();
         const auto scratch = fs::current_path() / ("editor-check-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-        fs::create_directories(scratch); projectStartupChecks(scratch); cameraChecks(scratch); transformSpaceChecks(scratch); editorChecks(scratch);
+        fs::create_directories(scratch); projectStartupChecks(scratch); cameraChecks(scratch); cameraNavigationChecks(scratch); transformSpaceChecks(scratch); editorChecks(scratch);
         const auto runtime = fs::current_path() / "scene-project-check"; fs::create_directories(runtime / "Assets");
         Scene gameScene; auto& camera = gameScene.entities.emplace_back(); camera.name = "Camera";
         camera.transform.localPosition = {0, 0, -5}; camera.addComponent<Camera>();

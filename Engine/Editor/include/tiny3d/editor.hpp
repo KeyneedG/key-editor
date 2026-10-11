@@ -1,6 +1,7 @@
 #pragma once
 #include "tiny3d/scene.hpp"
 #include "tiny3d/ui.hpp"
+#include "tiny3d/eryscript.hpp"
 #include <functional>
 #include <optional>
 
@@ -8,18 +9,25 @@ namespace tiny3d::editor {
 // Editor state and controls live in a separate library; the runtime knows only Game.
 class Editor final : public Game {
 public:
+    using PlayFactory = std::function<std::unique_ptr<Game>()>;
     Editor(Scene initial, std::filesystem::path engineDirectory, std::filesystem::path projectDirectory = {},
-           std::filesystem::path configFile = {});
+           std::filesystem::path configFile = {}, PlayFactory playFactory = {});
+    ~Editor() override;
     void update(float seconds, const Input& input) override;
     void frameRendered(const graphics::FrameStats& stats) override;
     Scene& scene() override { return view_; }
     const Scene& scene() const override { return view_; }
     bool executeScripts() const override { return false; }
-    bool captureMouse() const override { return looking_; }
+    bool captureMouse() const override { return playing() ? !playPaused_ && playFocused_ && playGame_->captureMouse() : looking_; }
     ScreenSettings screenSettings() const override { return {1280, 800, false}; }
     std::string title() const override;
 
     const Scene& content() const { return content_; }
+    bool playing() const { return playGame_ != nullptr; }
+    bool paused() const { return playPaused_; }
+    const Scene* playScene() const { return playGame_ ? &std::as_const(*playGame_).scene() : nullptr; }
+    void play();
+    void stop();
     const std::filesystem::path& projectDirectory() const { return project_; }
     const std::filesystem::path& scenePath() const { return scenePath_; }
     bool dirty() const { return current_ != saved_; }
@@ -39,6 +47,10 @@ private:
     enum class Space { World, Local };
     enum class Dialog { None, NewProject, NewScene, BuildSettings, About, AddObject, AddComponent, Unsaved };
     void rebuild();
+    void requireEditing() const;
+    void buildPlayControls();
+    void refreshPlayView();
+    void updatePlay(float seconds, const Input& input);
     void replace(Scene scene, const std::filesystem::path& path);
     void rememberProject();
     void request(const std::function<void()>& action);
@@ -47,6 +59,7 @@ private:
     void projectPanel(Entity& root);
     void dialog(Entity& root);
     void gizmos();
+    void refreshViewport();
     void refreshStats();
     void viewportInput(float seconds, const Input& input);
     Entity& element(Entity& parent, float x, float y, float z = -.05f);
@@ -57,7 +70,15 @@ private:
                   float height = 28, bool multiline = false);
     Entity& scroll(Entity& parent, float x, float y, float width, float height, float contentHeight, int slot);
 
-    Scene content_, view_;
+    Scene content_, view_, playControls_;
+    PlayFactory playFactory_;
+    std::unique_ptr<Game> playGame_;
+    Scripts playScripts_;
+    std::filesystem::path factoryProject_, editDirectory_;
+    bool playPaused_ = false, playStep_ = false, playFocused_ = false;
+    int editTargetFramerate_ = 0;
+    bool editVSync_ = false;
+    SimpleText* pauseLabel_ = nullptr;
     UI ui_;
     std::filesystem::path engine_, config_, project_, assets_, folder_, scenePath_, clickedAsset_;
     std::string current_, saved_, status_ = "Ready", menu_, dialogText_;
@@ -79,6 +100,7 @@ private:
     float sampleSeconds_ = 0, sampleUpdate_ = 0, sampleRender_ = 0, samplePresent_ = 0;
     unsigned sampleFrames_ = 0;
     Entity* viewportCamera_ = nullptr;
+    Entity* gizmoCamera_ = nullptr;
     std::array<Entity*, 3> scrolls_{};
     std::array<float, 3> offsets_{};
     std::array<Entity*, 3> handles_{};

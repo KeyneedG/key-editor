@@ -12,6 +12,9 @@ Open `Engine/Tiny3D.sln` in Visual Studio 2022 and set `Engine/engine.json` to:
 
 Choose **Debug | x64** or **Release | x64**, then press **Ctrl+Shift+B** to build
 and start the demo. Use `editor` mode to inspect and edit its initial scene.
+Press **Play F5** in the editor to test the current scene, **Pause** or **Step**
+to inspect simulation, and **Stop F5** to return to the unchanged editing scene.
+Escape releases the editor play cursor; click the game to capture it again.
 The solution builds through GCC with C++26 reflection enabled. Use GDB for source
 debugging; setup and commands are in [Engine/README.md](../Engine/README.md).
 
@@ -22,12 +25,13 @@ has a capsule collider and a kinematic rigidbody: it slides along blocks, and
 gravity does not move it. The camera is its child, with an eye-height local offset
 and no collider. Mouse yaw rotates the player; pitch rotates the camera locally.
 Gold cubes remain collectibles you can walk through.
-Their floating and spinning animation runs through EryScript components embedded
-in game.cpp. Each cube has its own script variables. See
+Their floating and spinning animation runs through EryScript components saved
+in `Assets/Untitled.scene.json`. Each cube has its own script variables. See
 [EryScriptExamples.md](EryScriptExamples.md) for engine and standalone examples.
 The cursor is hidden and locked at the center while the demo is focused. Captured
 clicks cannot resize or close the window through its border. Switching to another
-window releases it. Mouse sensitivity is `mouseSensitivity` in `game.cpp`.
+window releases it. Player speed and mouse sensitivity are Inspector fields on
+the `C++: PlayerMovement` component attached to the saved Player object.
 
 The pause menu has **Resume**, **Settings**, and **Quit**. It releases the mouse
 and pauses movement, physics, and collectible animation. Escape resumes from the
@@ -52,3 +56,18 @@ instructions are in [Engine/README.md](../Engine/README.md).
 The collectibles use reflected engine APIs and a directly reflected `std::sin`
 overload. See [EryScriptExamples.md](EryScriptExamples.md) for script names,
 project namespace discovery and the optional `ReflectionChecks.cpp` checks.
+
+## Native C++ components
+
+`Assets/Scripts/Spin.cpp` demonstrates a registered `tiny3d::MonoBehaviour`. After
+building, select a cube in the editor and choose **Add Component > C++: Spin**, or
+double-click its `[C++]` Assets entry. Its `speed` field can be edited in the Inspector
+and is saved with the scene. Open the Scripts folder in Assets to see its C++ files;
+subfolder scripts are shown only when browsing that folder. Scripts run in game mode
+and editor play; rebuild after changing C++.
+
+`PlayerMovement.cpp` owns WASD movement, mouse look, collision correction, and player
+reset. `CollectorController.cpp` manages collectible state and binds the saved menu
+buttons at runtime. Both are registered native components attached in the scene JSON.
+`game.cpp` only loads the startup scene and hosts UI/physics and window settings;
+scene objects, cameras, geometry, and menus are authored in Assets.

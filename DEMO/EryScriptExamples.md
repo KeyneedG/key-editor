@@ -1,6 +1,6 @@
 # EryScript examples
 
-The collectible animation in game.cpp runs real EryScript components. The
+The collectible animation in Assets/Untitled.scene.json runs real EryScript components. The
 engine API is discovered through C++26 reflection; the demo also exposes
 std::sin directly through reflection, without a conversion lambda.
 

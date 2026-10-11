@@ -1,6 +1,13 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
+    <ClCompile Include="Editor\src\play.cpp"><Filter>Editor</Filter></ClCompile>
+    <ClCompile Include="tests\demo_checks.cpp"><Filter>Demo</Filter></ClCompile>
+    <ClCompile Include="..\DEMO\Assets\Scripts\PlayerMovement.cpp"><Filter>Demo</Filter></ClCompile>
+    <ClCompile Include="..\DEMO\Assets\Scripts\CollectorController.cpp"><Filter>Demo</Filter></ClCompile>
+    <ClCompile Include="src\behaviour.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="tests\behaviour_checks.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="..\DEMO\Assets\Scripts\Spin.cpp"><Filter>Demo</Filter></ClCompile>
     <ClCompile Include="Rendering\Direct3D11\src\d3d11.cpp"><Filter>Rendering</Filter></ClCompile>
     <ClCompile Include="Rendering\Software\src\software.cpp"><Filter>Rendering</Filter></ClCompile>
     <ClCompile Include="tests\d3d11_checks.cpp"><Filter>Rendering</Filter></ClCompile>
@@ -38,6 +45,9 @@
     <ClInclude Include="include\tiny3d\engine.hpp">
       <Filter>Engine</Filter>
     </ClInclude>
+    <ClInclude Include="..\DEMO\Assets\Scripts\PlayerMovement.hpp"><Filter>Demo</Filter></ClInclude>
+    <ClInclude Include="..\DEMO\Assets\Scripts\CollectorController.hpp"><Filter>Demo</Filter></ClInclude>
+    <ClInclude Include="include\tiny3d\behaviour.hpp"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="include\tiny3d\scene.hpp"><Filter>Engine</Filter></ClInclude>
     <ClInclude Include="include\tiny3d\graphics.hpp"><Filter>Rendering</Filter></ClInclude>
     <ClInclude Include="Rendering\Direct3D11\include\tiny3d\d3d11.hpp"><Filter>Rendering</Filter></ClInclude>

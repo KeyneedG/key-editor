@@ -144,6 +144,14 @@ physics, and game updates while editing.
 - **File:** New Scene, New Project, Open Project, Build Settings.
 - **Edit:** Undo, Redo, Save. Shortcuts: Ctrl+Z, Ctrl+Y/Ctrl+Shift+Z, Ctrl+S.
 - **Help:** About EryEngine.
+- **Play F5:** run the current scene, including unsaved edits, in a separate runtime
+  copy using its game cameras, native/EryScript components, physics, and UI. **Stop F5**
+  returns to editing with the original scene, selection, unsaved state, and undo/redo
+  history. Saving and editing are disabled during play. **Pause / Resume** freezes or
+  resumes simulation; **Step** advances one 1/60-second frame while paused. Escape
+  releases mouse capture; click the game to capture it again. Focus loss also releases
+  capture. Runtime quit requests stop play instead of closing the editor. The preview
+  keeps the editor's resolution and window mode.
 - **Hierarchy:** select objects or use **+** to create an empty object, cube,
   plane, or camera. Children appear beneath their parents.
 - **Inspector:** edit names, tags, layers, visibility, local transforms, parent
@@ -151,7 +159,10 @@ physics, and game updates while editing.
   use degrees; vectors are X/Y/Z and colors are R/G/B. Add or remove components.
   Camera/content reference fields use scene entity indices (-1 means no reference).
 - **Project:** starts inside Assets, creating the folder when opening a project
-  without it. Double-click folders to browse and scene JSON files to load them;
+  without it. C++ source/header files have a `[C++]` prefix and appear only in
+  their own folder; double-click a subfolder to view its scripts.
+  Select an object and double-click a compiled behaviour script to attach it.
+  Double-click folders to browse and scene JSON files to load them;
   Refresh reloads the directory listing. Wheel-scroll each panel independently.
 - **Scene view:** click a mesh to select it. Use W/E/R or the toolbar to move,
   rotate, or scale; drag the colored primitive handles. Each drag is one undo
@@ -198,8 +209,9 @@ JSON persistence covers all built-in components, shared mesh geometry, hierarchy
 links, tags, layers, visibility, and local transforms. UI-generated meshes are
 rebuilt after loading. Native callbacks, script execution state, and project-specific
 reflection bindings are runtime code and must be reattached by C++ projects.
-Custom C++ components require a serializer; saving reports unsupported components
-instead of silently dropping them. Undo/redo uses up to 64 scene snapshots.
+Registered `MonoBehaviour` components save their type, enabled flag, and configuration
+fields. Other custom C++ components require a serializer; saving reports unsupported
+components instead of silently dropping them. Undo/redo uses up to 64 scene snapshots.
 
 Include `tiny3d/scene.hpp` to use `serializeScene`, `deserializeScene`, `saveScene`,
 and `loadScene` from game code. Scene loading constructs a fresh scene and rejects
@@ -281,9 +293,12 @@ A game directory contains C++ source files and `project.json`:
 }
 ```
 
-List every C++ translation unit, with paths relative to the project directory.
-The engine's `include` directory and your project's root are available to the
-compiler automatically.
+List C++ translation units outside Assets with paths relative to the project directory.
+C++ source files (`.cpp`, `.cc`, `.cxx`, `.c++`, case insensitive) inside Assets are
+discovered recursively and compiled automatically on the next build; files already
+listed in `sources` are compiled once. Headers are displayed but are not translation
+units. The engine's `include` directory, your project's root, and Assets are available
+to the compiler automatically.
 
 Include `tiny3d/project.hpp`, derive a class from `tiny3d::Game`, and implement:
 
@@ -337,8 +352,70 @@ The engine updates the game and calls `Renderer::render(scene)` every frame.
 The Windows backend composes the frame and letterbox bars in a reusable offscreen
 bitmap, then copies the complete result to the window in one operation. This avoids
 flashing the black background between frames.
-Update your custom component behavior from `Game::update`. Input exposes
+Update plain custom components from `Game::update`, or derive from `MonoBehaviour`
+to receive automatic callbacks. Input exposes
 `held`, `pressed`, and `released` for both keyboard keys and mouse buttons.
+
+## C++ behaviour components
+
+Include `tiny3d/behaviour.hpp` and derive a script from `tiny3d::MonoBehaviour`.
+`Awake()` runs once on its first enabled scripting tick. `Start()` runs once before
+its first update; `Update(float, const Input&)` and `LateUpdate(float, const Input&)`
+run each enabled frame. All native Awake callbacks precede native Start callbacks,
+and all Update callbacks finish before LateUpdate. The native loop and `--render`
+use the same `Scripts` runner as EryScript. Scripts are paused while editing and run
+in the editor's isolated play scene.
+Visibility controls rendering; use the component's `enabled` flag to pause its logic.
+New components begin on the next scripting tick. Callback errors are reported by
+`error()` and stop that instance while other scripts continue.
+
+```cpp
+// Assets/Scripts/Move.cpp
+#include "tiny3d/behaviour.hpp"
+
+class Move final : public tiny3d::MonoBehaviour {
+public:
+    void Awake() override {
+        name() = "Player";
+        tag() = "Player";
+        layer() = 0;
+        // gameObject() returns the attached Entity (also aliased as GameObject).
+        gameObject().visible = true;
+    }
+    void Update(float seconds, const tiny3d::Input& input) override {
+        if (input.held(tiny3d::Key::D)) transform().localPosition.x += seconds * 4;
+        if (auto* camera = getComponent<tiny3d::Camera>()) camera->depth = 1;
+    }
+};
+TINY3D_REGISTER_BEHAVIOUR(Move)
+```
+
+Place the registration macro once in the `.cpp` file after the class definition.
+Registered scripts must have a default constructor and a unique type name.
+Rebuild after adding or editing C++ scripts, then use **Add Component > C++: Move**
+or select an object and double-click its `[C++]` script in Assets. In C++ code,
+`object.addComponent<Move>()` constructs a known type; `addBehaviour(object, "Move")`
+attaches a registered type by name. `gameObject()`, `transform()`, `name()`, `tag()`,
+`layer()`, `getComponent<T>()`, and `addComponent<T>()` are available immediately after
+attachment. `scene()` becomes available in Awake. Constructors run before attachment.
+Owner access stays valid when an entity is moved into the scene. Override
+`captureMouse() const` to request cursor capture while the component is enabled;
+the default Game implementation combines these requests. Editor play releases capture
+with Escape and restores it when you click the game.
+
+For a scene-based project, keep `"sources": []` and place behaviour `.cpp` files under
+Assets; the engine loads the startup scene without requiring a custom `createGame()`.
+Existing manifests with nonempty `sources` continue to use `createGame()`. Set
+`"sceneBased": true` if you explicitly list behaviour sources and want the engine's
+scene-based game instead.
+
+Override `saveFields() const` and `loadFields(const tiny3d::json::Value&)` to persist
+editable configuration. Return a JSON object; scalar values and numeric arrays appear
+in the Inspector. The demo's `Assets/Scripts/Spin.cpp` shows an editable `speed` field.
+Transient state, such as elapsed time and callback counts, starts fresh on scene load
+and undo/redo. With no overrides, scripts save their type and enabled flag and restore
+constructor defaults. Missing compiled scripts keep their identity and saved fields,
+show a rebuild message in the Inspector, and report an error if run.
 
 ## EryScript components
 
