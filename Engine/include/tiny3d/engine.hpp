@@ -29,8 +29,10 @@ struct Mesh {
     // Counterclockwise winding when viewed from outside the surface.
     std::vector<std::array<std::size_t, 3>> triangles{};
     std::uint64_t revision = 0;
+    std::vector<graphics::QuadInstance> quads{};
+    std::vector<graphics::ClipPlane> clipPlanes{}; // In this mesh's local coordinates.
     // Call after editing these arrays in place so cached render backends re-upload them.
-    void markChanged() { ++revision; }
+    void markChanged() { ++revision; quads.clear(); clipPlanes.clear(); }
 };
 
 Mesh cube();   // Unit cube, centered at the origin.
@@ -189,6 +191,7 @@ public:
     int width() const { return width_; }
     int height() const { return height_; }
     const std::vector<std::uint32_t>& pixels() const { return pixels_; }
+    graphics::RenderStats stats() const { return stats_; }
 
 private:
     struct ScreenPoint { float x, y, inverseZ; };
@@ -196,6 +199,7 @@ private:
     int width_, height_;
     std::vector<std::uint32_t> pixels_;
     std::vector<float> depth_;
+    graphics::RenderStats stats_;
 };
 
 // Values match Windows virtual keys; other backends can translate to these names.
@@ -305,6 +309,12 @@ struct ScreenSettings {
     bool operator!=(const ScreenSettings& other) const { return !(*this == other); }
 };
 
+// Shared runtime settings for games and the editor; changes apply on the next frame.
+struct Application {
+    inline static int targetFramerate = 0; // FPS; zero (or negative) disables the CPU frame limiter.
+    inline static bool vSync = false; // Synchronize presentation with the monitor when supported.
+};
+
 // Own your game state in a subclass. The platform supplies input and elapsed seconds.
 class Game {
 public:
@@ -318,6 +328,7 @@ public:
     virtual bool shouldQuit() const { return false; }
     virtual ScreenSettings screenSettings() const { return {}; }
     virtual bool executeScripts() const { return true; }
+    virtual void frameRendered(const graphics::FrameStats&) {}
 };
 
 // Native Windows window. Other platforms can use Renderer directly.

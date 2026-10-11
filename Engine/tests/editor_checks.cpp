@@ -29,6 +29,20 @@ void clickButton(editor::Editor& editor, const std::string& name) {
     auto p = b->transform.position(); click(editor, int(640 + p.x), int(400 - p.y));
 }
 
+void applicationChecks() {
+    check(Application::targetFramerate == 0 && !Application::vSync, "Application should start uncapped with VSync disabled");
+    Scene scene;
+    auto& script = scene.entities.emplace_back().addComponent<EryScript>(
+        "using tiny3d\nmethod Awake\n Application.targetFramerate = 144\n Application.vSync = true\nmend\n"
+        "method Update\n Application.targetFramerate = 0\n Application.vSync = false\nmend\n");
+    Scripts scripts; scripts.awake(scene);
+    check(script.error().empty(), "Application settings are unavailable to EryScript");
+    check(Application::targetFramerate == 144 && Application::vSync, "Script did not update static Application settings");
+    scripts.update(scene, .01f, {});
+    check(script.error().empty() && Application::targetFramerate == 0 && !Application::vSync,
+        "Script did not disable FPS limiting and VSync at runtime");
+}
+
 void sceneChecks() {
     Scene scene; scene.entities.resize(5);
     auto& parent = scene.entities[0]; parent.name = "Parent \"quoted\""; parent.tag = "test";
@@ -99,12 +113,184 @@ void uiChecks() {
     ui.cancel();
 }
 
+void projectStartupChecks(const fs::path& scratch) {
+    const auto source = scratch / "FirstRunProject"; fs::create_directories(source);
+    std::ofstream(source / "project.json") << "{\"sources\":[]}";
+    std::ofstream(source / "RootOnly.txt") << "Project metadata, not an asset";
+    const auto expectAssets = [&](editor::Editor& editor) {
+        bool heading = false;
+        for (auto& e : editor.scene().entities) if (auto* text = e.getComponent<SimpleText>(); text && e.layer == 31 && text->text == "Assets") heading = true;
+        check(heading && !findButton(editor.scene(), "RootOnly.txt") && !findButton(editor.scene(), "project.json") &&
+            !findButton(editor.scene(), ".. Parent folder"), "Project browser did not start inside Assets");
+    };
+    editor::Editor firstRun({}, scratch, source);
+    check(fs::is_directory(source / "Assets"), "First run did not create the missing Assets directory"); expectAssets(firstRun);
+    firstRun.newProject("StartupGame"); firstRun.update(0, pointer(0, 0)); expectAssets(firstRun);
+    check(findButton(firstRun.scene(), "Main.scene.json"), "New project assets were not visible");
+    const auto target = firstRun.projectDirectory(); fs::create_directories(target / "Assets/Textures");
+    std::ofstream(target / "Assets/Textures/Texture.txt") << "Asset";
+    clickButton(firstRun, "Refresh"); clickButton(firstRun, "[DIR] Textures"); clickButton(firstRun, "[DIR] Textures");
+    check(findButton(firstRun.scene(), "Texture.txt") && findButton(firstRun.scene(), ".. Parent folder"), "Asset subfolder navigation failed");
+    editor::Editor restarted({}, scratch, target); expectAssets(restarted);
+    check(findButton(restarted.scene(), "Main.scene.json"), "Restart did not show the new project's asset contents");
+    firstRun.openProject(target); firstRun.update(0, pointer(0, 0)); expectAssets(firstRun);
+}
+
+void cameraChecks(const fs::path& scratch) {
+    editor::Editor editor({}, scratch);
+    const auto camera = [&]() -> Transform {
+        for (auto& e : editor.scene().entities)
+            if (auto* c = e.getComponent<Camera>(); c && c->enabled && c->layers == layerMask(0)) return e.transform;
+        throw std::runtime_error("Editor camera missing");
+    };
+    float yaw = 0, pitch = .18f;
+    const auto expectRotation = [&] {
+        const auto expected = Quaternion::fromEuler({pitch, yaw, 0}), actual = camera().rotation();
+        for (Vector3 axis : {Vector3{1, 0, 0}, Vector3{0, 1, 0}, Vector3{0, 0, 1}})
+            check(close(rotate(axis, actual), rotate(axis, expected)), "Editor camera changed axis, clamped, or jumped at an angle boundary");
+    };
+    const auto turn = [&](Input& input, float dx, float dy) {
+        input.beginFrame(); input.mouseDeltaX = dx; input.mouseDeltaY = dy;
+        yaw = std::remainder(yaw + dx * .003f, 2 * pi); pitch = std::remainder(pitch + dy * .003f, 2 * pi);
+        editor.update(.016f, input); expectRotation();
+    };
+    auto input = pointer(500, 300); input.set(MouseButton::Right, true);
+    input.mouseDeltaX = 500; input.mouseDeltaY = 700; editor.update(.016f, input);
+    check(editor.captureMouse(), "Right-button look did not capture the mouse"); expectRotation();
+    for (int i = 0; i < 45; ++i) turn(input, 31, 0); // Through 90, 180, and the yaw wrap.
+    for (int i = 0; i < 36; ++i) turn(input, 0, 80); // Through both pitch poles and a complete turn.
+    input.mouseX = 80; input.mouseY = 180; turn(input, 20, 30);
+    check(editor.captureMouse(), "Camera look stopped when the cursor left the viewport");
+    for (int i = 0; i < 15; ++i) turn(input, 40, -35);
+    for (int i = 0; i < 15; ++i) turn(input, -40, 35);
+    for (int i = 0; i < 5; ++i) turn(input, 0, 0);
+    const auto beforeFlight = camera().position();
+    input.beginFrame(); input.set(Key::W, true); editor.update(.1f, input);
+    check(close(camera().position(), beforeFlight + camera().forward() * .6f), "Camera fly movement did not follow its current orientation");
+    input.beginFrame(); input.set(Key::W, false); editor.update(.016f, input);
+    input.beginFrame(); input.set(MouseButton::Right, false); editor.update(.016f, input);
+    check(!editor.captureMouse(), "Releasing right-button look kept the mouse captured"); expectRotation();
+    input = pointer(500, 300); input.set(MouseButton::Right, true); input.set(MouseButton::Right, false); editor.update(.016f, input);
+    check(!editor.captureMouse(), "A completed right click started mouse capture"); expectRotation();
+
+    input = pointer(100, 200); input.set(MouseButton::Right, true); editor.update(.016f, input);
+    check(!editor.captureMouse(), "Right-click in the Hierarchy started camera look");
+    input.beginFrame(); input.mouseX = 500; input.mouseY = 300; input.mouseDeltaX = 90; editor.update(.016f, input);
+    check(!editor.captureMouse(), "Dragging into the viewport unexpectedly started camera look"); expectRotation();
+    input.beginFrame(); input.set(MouseButton::Right, false); editor.update(.016f, input);
+    input.beginFrame(); input.set(MouseButton::Right, true); editor.update(.016f, input);
+    input.beginFrame(); input.focused = false; input.mouseDeltaY = 200; editor.update(.016f, input);
+    check(!editor.captureMouse(), "Focus loss kept the editor mouse captured"); expectRotation();
+    input.beginFrame(); input.focused = true; input.mouseDeltaX = 100; editor.update(.016f, input);
+    check(!editor.captureMouse(), "Regaining focus resumed look without a new right click"); expectRotation();
+    input.beginFrame(); input.set(MouseButton::Right, false); editor.update(.016f, input);
+    input.beginFrame(); input.set(MouseButton::Right, true); editor.update(.016f, input);
+    input.beginFrame(); input.set(Key::Escape, true); editor.update(.016f, input);
+    check(!editor.captureMouse(), "Escape did not release camera capture"); expectRotation();
+    input.beginFrame(); input.mouseDeltaY = 100; editor.update(.016f, input); expectRotation();
+    check(!editor.dirty(), "Editor camera movement dirtied the scene");
+}
+
+void transformSpaceChecks(const fs::path& scratch) {
+    Scene scene; auto& parent = scene.entities.emplace_back(); parent.name = "Parent";
+    parent.transform.localRotation = Quaternion::fromEuler({.2f, .6f, .35f}); parent.transform.localScale = {1.4f, .8f, 1.2f};
+    auto& child = scene.entities.emplace_back(); child.name = "Child"; child.setParent(&parent, false);
+    child.transform.localPosition = {.5f, .6f, 0}; child.transform.localRotation = Quaternion::fromEuler({.15f, .25f, -.2f});
+    child.addComponent<MeshRenderer>(std::make_shared<Mesh>(cube()));
+    editor::Editor editor(std::move(scene), scratch);
+    clickButton(editor, ">1: Child"); auto focus = pointer(0, 0); focus.set(Key::F, true); editor.update(.016f, focus);
+    const auto initial = serializeScene(editor.content());
+    const auto firstHandle = [&]() -> Entity& {
+        for (auto& e : editor.scene().entities) if (e.layer == 30) return e;
+        throw std::runtime_error("Space gizmo missing");
+    };
+    const auto drag = [&](const std::string& tool, bool cancel = false) {
+        clickButton(editor, tool);
+        auto& handle = firstHandle(); auto mesh = handle.getComponent<MeshRenderer>()->mesh;
+        // Pick away from the rotation rings' intersections.
+        Vector3 local{}; const auto first = tool.starts_with("Rotate") ? 6 * 8 : mesh->vertices.size() - 8;
+        for (std::size_t i = first; i < first + 8; ++i) local = local + mesh->vertices[i] * .125f;
+        const Entity* camera = nullptr;
+        for (auto& e : editor.scene().entities) if (auto* c = e.getComponent<Camera>(); c && c->enabled && c->layers == layerMask(0)) camera = &e;
+        check(camera, "Space test camera missing");
+        const auto project = [&](Vector3 point) {
+            const auto v = inverseRotate(point - camera->transform.position(), camera->transform.rotation());
+            return Vector3{(v.x / (v.z * std::tan(pi / 6) * 1280 / 800) + 1) * 640, (1 - v.y / (v.z * std::tan(pi / 6))) * 400, 0};
+        };
+        const auto worldPoint = handle.transform.point(local), screen = project(worldPoint);
+        const auto axis = handle.transform.right();
+        const auto direction = tool.starts_with("Rotate") ? normalized(cross(axis, worldPoint - handle.transform.position())) : axis;
+        const auto screenAxis = normalized(project(worldPoint + direction) - screen);
+        auto p = pointer(int(std::lround(screen.x)), int(std::lround(screen.y))); p.set(MouseButton::Left, true); editor.update(.016f, p);
+        p.beginFrame(); p.mouseX += int(std::lround(screenAxis.x * 45)); p.mouseY += int(std::lround(screenAxis.y * 45)); editor.update(.016f, p);
+        p.beginFrame(); if (cancel) p.set(Key::Escape, true); else p.set(MouseButton::Left, false); editor.update(.016f, p);
+    };
+    check(close(firstHandle().transform.right(), {1, 0, 0}), "World gizmo is not aligned to world axes");
+    clickButton(editor, "World");
+    check(findButton(editor.scene(), "Local") && !editor.dirty(), "Space toggle dirtied the scene or did not update its label");
+    const auto originalRotation = editor.content().entities[1].transform.rotation();
+    const auto localAxis = rotate({1, 0, 0}, originalRotation);
+    check(close(firstHandle().transform.right(), localAxis), "Local gizmo ignores object/parent rotation");
+    const auto beforePosition = editor.content().entities[1].transform.position();
+    drag("Move W");
+    auto movement = editor.content().entities[1].transform.position() - beforePosition;
+    check(length(movement) > .1f && length(cross(normalized(movement), localAxis)) < .001f, "Local movement used the wrong axis");
+    editor.undo(); editor.update(0, pointer(0, 0)); check(serializeScene(editor.content()) == initial, "Local movement undo failed");
+    drag("Rotate E");
+    auto delta = normalized(editor.content().entities[1].transform.rotation() * inverse(originalRotation));
+    check(length(Vector3{delta.x, delta.y, delta.z}) > .01f && length(cross(normalized({delta.x, delta.y, delta.z}), localAxis)) < .001f, "Local rotation used the wrong axis");
+    editor.undo(); editor.update(0, pointer(0, 0));
+    drag("Scale R");
+    auto scale = editor.content().entities[1].transform.localScale;
+    check(std::abs(scale.x - 1) > .1f && scale.y == 1 && scale.z == 1, "Local scale changed unrelated axes");
+    editor.undo(); editor.update(0, pointer(0, 0));
+    clickButton(editor, "Local");
+    drag("Move W"); movement = editor.content().entities[1].transform.position() - beforePosition;
+    check(movement.x > .1f && std::abs(movement.y) < .001f && std::abs(movement.z) < .001f, "World movement followed parent axes");
+    editor.undo(); editor.update(0, pointer(0, 0));
+    drag("Rotate E"); delta = normalized(editor.content().entities[1].transform.rotation() * inverse(originalRotation));
+    check(std::abs(delta.x) > .01f && std::abs(delta.y) < .001f && std::abs(delta.z) < .001f, "World rotation used local axes");
+    editor.undo(); editor.update(0, pointer(0, 0));
+    drag("Scale R"); scale = editor.content().entities[1].transform.localScale;
+    check(scale.x > 1 && scale.y > 1 && scale.z > 1, "World scale did not project onto rotated local axes");
+    editor.undo(); editor.update(0, pointer(0, 0));
+    drag("Move W", true); check(serializeScene(editor.content()) == initial, "Cancelling a world-space drag changed the scene");
+    check(!editor.dirty(), "Space controls or cancelled drag left the scene dirty");
+}
+
+void statsChecks(editor::Editor& editor) {
+    const auto findStats = [&]() -> SimpleText* {
+        for (auto& e : editor.scene().entities) if (auto* text = e.getComponent<SimpleText>(); text && text->text.starts_with("Test backend")) return text;
+        return nullptr;
+    };
+    check(!findStats(), "Stats panel should start hidden");
+    clickButton(editor, "0: Seed");
+    graphics::FrameStats frame{{17, 204, 136, 3, 2}, "Test backend", 1280, 800, .5f, .0012f, .0023f, .0034f};
+    frame.rendering.meshSubmissions = 21; frame.rendering.instances = 37;
+    frame.rendering.instancedBatches = 2; frame.rendering.glyphInstances = 30;
+    editor.frameRendered(frame); clickButton(editor, "Stats");
+    auto* text = findStats(); check(text, "Stats panel did not open");
+    check(text->text.find("FPS: 2.0 | Frame: 500.0 ms") != std::string::npos, "Stats frame time was clamped to simulation time");
+    check(text->text.find("Batches / draws: 17") != std::string::npos && text->text.find("Triangles: 204") != std::string::npos, "Stats omitted backend counts");
+    check(text->text.find("Instances: 37 | Glyphs: 30") != std::string::npos && text->text.find("Instanced: 2 | Saved draws: 4") != std::string::npos,
+        "Stats omitted instance counts or draw savings");
+    const auto count = editor.scene().entities.size();
+    frame.frameSeconds = .25f; frame.rendering.batches = 23; editor.frameRendered(frame); editor.update(.016f, pointer(0, 0));
+    check(findStats() == text && editor.scene().entities.size() == count && text->text.find("Batches / draws: 23") != std::string::npos, "Live stats rebuilt the editor or did not update");
+    const auto before = serializeScene(editor.content());
+    click(editor, 800, 200); check(serializeScene(editor.content()) == before, "Stats panel click edited scene content");
+    unsigned handles = 0; for (auto& e : editor.scene().entities) if (e.layer == 30) ++handles;
+    check(handles == 3, "Stats panel click changed object selection");
+    clickButton(editor, "Stats"); check(!findStats(), "Stats panel did not hide");
+}
+
 void editorChecks(const fs::path& scratch) {
     Scene initial; auto& cubeObject = initial.entities.emplace_back(); cubeObject.name = "Seed";
     cubeObject.addComponent<MeshRenderer>(std::make_shared<Mesh>(cube()));
     std::ofstream(scratch / "engine.json") << "{\"project\":\"\",\"mode\":\"editor\",\"autoStart\":false}";
     editor::Editor editor(std::move(initial), scratch, {}, scratch / "engine.json");
     check(!editor.executeScripts(), "Editor executes scene scripts");
+    statsChecks(editor);
     editor.newProject("TestGame"); check(fs::is_directory(scratch / "Projects/TestGame/Assets"), "Project Assets missing");
     auto manifest = scratch / "Projects/TestGame/project.json"; check(fs::is_regular_file(manifest), "Project manifest missing");
     std::ifstream config(scratch / "engine.json"); auto settings = json::parse(std::string((std::istreambuf_iterator<char>(config)), {}));
@@ -189,14 +375,16 @@ void editorChecks(const fs::path& scratch) {
     editor.undo(); check(close(editor.content().entities[0].transform.localScale, {1, 1, 1}), "Scale gizmo undo failed");
     editor.newProject("CopyGame"); check(fs::is_regular_file(scratch / "Projects/CopyGame/Assets/Second.scene.json"), "New project did not copy assets");
     check(editor.scenePath().filename() == "Main2.scene.json", "Project copy overwrote an existing scene");
-    Renderer renderer(1280, 800); editor.update(0, pointer(0, 0)); renderer.render(editor.scene()); renderer.savePPM((scratch / "editor.ppm").string());
+    Renderer renderer(1280, 800); editor.update(0, pointer(0, 0)); renderer.render(editor.scene());
+    editor.frameRendered({renderer.stats(), "Software", 1280, 800, .25f, .001f, .002f, 0}); clickButton(editor, "Stats");
+    renderer.render(editor.scene()); renderer.savePPM((scratch / "editor.ppm").string());
 }
 
 int main() {
     try {
-        sceneChecks(); uiChecks();
+        applicationChecks(); sceneChecks(); uiChecks();
         const auto scratch = fs::current_path() / ("editor-check-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-        fs::create_directories(scratch); editorChecks(scratch);
+        fs::create_directories(scratch); projectStartupChecks(scratch); cameraChecks(scratch); transformSpaceChecks(scratch); editorChecks(scratch);
         const auto runtime = fs::current_path() / "scene-project-check"; fs::create_directories(runtime / "Assets");
         Scene gameScene; auto& camera = gameScene.entities.emplace_back(); camera.name = "Camera";
         camera.transform.localPosition = {0, 0, -5}; camera.addComponent<Camera>();

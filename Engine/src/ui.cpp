@@ -8,12 +8,13 @@
 namespace tiny3d {
 namespace {
 
-void quad(Mesh& mesh, float x, float y, float width, float height) {
+void quad(Mesh& mesh, float x, float y, float width, float height, bool instance = true) {
     const auto first = mesh.vertices.size();
     mesh.vertices.insert(mesh.vertices.end(), {{x, y, 0}, {x + width, y, 0},
         {x + width, y + height, 0}, {x, y + height, 0}});
     mesh.triangles.push_back({first, first + 2, first + 1}); // Faces -Z, toward the UI camera.
     mesh.triangles.push_back({first, first + 3, first + 2});
+    if (instance) mesh.quads.push_back({x, y, 0, width, height});
 }
 
 // Built-in 5x7 ink patterns. Lowercase uses the same shapes as uppercase.
@@ -84,14 +85,18 @@ std::shared_ptr<Mesh> textMesh(const SimpleText& text) {
     for (unsigned char character : text.text) {
         if (character == '\n') { x = left; y -= 8 * text.pixelSize; continue; }
         const auto rows = glyph(character);
+        std::uint64_t ink = 0;
         for (int row = 0; row < 7; ++row) {
+            ink |= std::uint64_t(rows[row]) << (row * 5);
             for (int column = 0; column < 5; ++column) {
                 if (rows[row] & (1u << (4 - column))) {
                     quad(*mesh, x + column * text.pixelSize, y - (row + 1) * text.pixelSize,
-                        text.pixelSize, text.pixelSize);
+                        text.pixelSize, text.pixelSize, false);
                 }
             }
         }
+        if (ink) mesh->quads.push_back({x, y - 7 * text.pixelSize, 0, 5 * text.pixelSize, 7 * text.pixelSize,
+            std::uint32_t(ink), std::uint32_t(ink >> 32) | 0x80000000u});
         x += 6 * text.pixelSize;
     }
     return mesh;
@@ -167,6 +172,15 @@ std::shared_ptr<const Mesh> clippedMesh(const Entity& entity, std::shared_ptr<co
         if (s.x == 0 || s.y == 0 || s.z == 0) return std::make_shared<Mesh>();
     }
     auto result = std::make_shared<Mesh>();
+    result->quads = source->quads; result->clipPlanes = source->clipPlanes;
+    if (!result->quads.empty()) for (const Entity* mask : masks) {
+        const auto* image = mask->getComponent<Image>();
+        const auto point = [&](Vector3 v) { return mask->transform.inversePoint(entity.transform.point(v)); };
+        const auto p = point({}), x = point({1, 0, 0}) - p, y = point({0, 1, 0}) - p, z = point({0, 0, 1}) - p;
+        result->clipPlanes.insert(result->clipPlanes.end(), {{x.x, y.x, z.x, p.x + image->width * .5f},
+            {-x.x, -y.x, -z.x, image->width * .5f - p.x}, {x.y, y.y, z.y, p.y + image->height * .5f},
+            {-x.y, -y.y, -z.y, image->height * .5f - p.y}});
+    }
     for (auto triangle : source->triangles) {
         std::vector<Vector3> polygon;
         for (auto i : triangle) polygon.push_back(entity.transform.point(source->vertices[i]));
@@ -278,6 +292,7 @@ void UI::refresh(Scene& scene) {
                 SimpleText label; label.text = display; label.pixelSize = field->pixelSize; label.centered = false;
                 auto mesh = textMesh(label);
                 for (auto& v : mesh->vertices) { v.x += -image->width * .5f + 6; v.y += image->height * .5f - 6; v.z = -.02f; }
+                for (auto& q : mesh->quads) { q.x += -image->width * .5f + 6; q.y += image->height * .5f - 6; q.z = -.02f; }
                 field->sourceMesh_ = mesh; field->builtText_ = display; field->builtPixelSize_ = field->pixelSize;
                 field->builtWidth_ = image->width; field->builtHeight_ = image->height;
             }

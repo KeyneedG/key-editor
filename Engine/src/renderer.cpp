@@ -66,6 +66,7 @@ Color shade(Color color, float brightness) {
 } // namespace
 
 void Renderer::render(const Scene& scene, Color background) {
+    stats_ = {};
     std::fill(pixels_.begin(), pixels_.end(), background.packed());
     struct View { const Camera* camera; const Transform* transform; };
     std::vector<View> views;
@@ -81,6 +82,7 @@ void Renderer::render(const Scene& scene, Color background) {
     });
     const Vector3 light = normalized({-.5f, 1, -.4f});
     for (const View& view : views) {
+        ++stats_.cameras;
         const Camera& camera = *view.camera;
         if (!(camera.nearPlane > 0 && camera.farPlane > camera.nearPlane) ||
             (camera.orthographic ? !(camera.orthographicSize > 0) :
@@ -108,8 +110,12 @@ void Renderer::render(const Scene& scene, Color background) {
             if (!entity.visibleInHierarchy() || !(camera.layers & layerMask(entity.layer))) continue;
             for (const auto& component : entity.components) {
                 const auto* visual = dynamic_cast<const MeshRenderer*>(component.get());
-                if (!visual || !visual->enabled || !visual->mesh) continue;
+                if (!visual || !visual->enabled || !visual->mesh || visual->mesh->triangles.empty()) continue;
                 const Mesh& mesh = *visual->mesh;
+                ++stats_.batches;
+                ++stats_.meshSubmissions; ++stats_.instances;
+                stats_.triangles += mesh.triangles.size();
+                stats_.vertices += mesh.vertices.size();
                 std::vector<Vector3> world;
                 world.reserve(mesh.vertices.size());
                 for (Vector3 v : mesh.vertices) world.push_back(entity.transform.point(v));

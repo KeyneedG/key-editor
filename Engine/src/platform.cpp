@@ -5,7 +5,6 @@
 #include <chrono>
 #include <iostream>
 #include <stdexcept>
-#include <thread>
 
 #if defined(_WIN32) && !defined(TINY3D_HEADLESS)
 #define WIN32_LEAN_AND_MEAN
@@ -258,6 +257,32 @@ struct WindowHandle {
         if (IsWindow(value)) DestroyWindow(value);
     }
 };
+
+struct FrameLimiter {
+    HANDLE timer = nullptr;
+    ~FrameLimiter() { if (timer) CloseHandle(timer); }
+    void wait(std::chrono::steady_clock::time_point frameStart, int fps) {
+        if (fps <= 0) return;
+        const auto duration = std::chrono::duration<double>(1.0 / fps);
+        const auto deadline = frameStart + std::chrono::duration_cast<std::chrono::steady_clock::duration>(duration);
+        const auto remaining = deadline - std::chrono::steady_clock::now();
+        if (remaining <= std::chrono::steady_clock::duration::zero()) return;
+        if (!timer) {
+            timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                TIMER_MODIFY_STATE | SYNCHRONIZE);
+            if (!timer) timer = CreateWaitableTimerW(nullptr, FALSE, nullptr); // Older Windows fallback.
+            if (!timer) throw std::runtime_error("Cannot create frame limiter timer");
+        }
+        LARGE_INTEGER due{};
+        // A negative due time is relative, expressed in 100 ns units.
+        using Ticks = std::chrono::duration<LONGLONG, std::ratio<1, 10000000>>;
+        due.QuadPart = -std::max<LONGLONG>(1, std::chrono::duration_cast<Ticks>(remaining).count());
+        if (!SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE) ||
+            WaitForSingleObject(timer, INFINITE) != WAIT_OBJECT_0) {
+            throw std::runtime_error("Cannot wait for frame limiter timer");
+        }
+    }
+};
 } // namespace
 
 int run(Game& game, int width, int height, unsigned frameLimit, graphics::BackendFactory rendererFactory) {
@@ -300,6 +325,7 @@ int run(Game& game, int width, int height, unsigned frameLimit, graphics::Backen
     constexpr std::array<int, 5> mouseButtons{VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2};
     Input& input = state.input;
     auto previousTime = std::chrono::steady_clock::now();
+    FrameLimiter limiter;
     unsigned frames = 0;
     std::string previousTitle;
     while (state.running) {
@@ -339,21 +365,30 @@ int run(Game& game, int width, int height, unsigned frameLimit, graphics::Backen
         const float elapsed = std::chrono::duration<float>(frameStart - previousTime).count();
         previousTime = frameStart;
         const float seconds = std::min(elapsed, .05f); // Avoid jumps after pauses or window dragging.
+        const auto updateStart = std::chrono::steady_clock::now();
         game.update(seconds, input);
         if (game.shouldQuit()) break;
         if (game.executeScripts()) scripts.update(game.scene(), seconds, input);
         applyScreenSettings(window.value, renderer, screen, game.screenSettings());
         captureMouse(window.value, state, game.captureMouse());
+        const auto renderStart = std::chrono::steady_clock::now();
         renderer.render(game.scene(), {28, 36, 52});
+        const auto renderEnd = std::chrono::steady_clock::now();
         const std::string title = game.title();
         if (title != previousTitle) {
             SetWindowTextA(window.value, title.c_str());
             previousTitle = title;
         }
         GetClientRect(window.value, &client);
+        const auto presentStart = std::chrono::steady_clock::now();
         renderer.present(client.right, client.bottom);
+        const auto presentEnd = std::chrono::steady_clock::now();
+        game.frameRendered({renderer.stats(), renderer.name(), renderer.width(), renderer.height(), elapsed,
+            std::chrono::duration<float>(renderStart - updateStart).count(),
+            std::chrono::duration<float>(renderEnd - renderStart).count(),
+            std::chrono::duration<float>(presentEnd - presentStart).count()});
         if (frameLimit && ++frames >= frameLimit) break;
-        std::this_thread::sleep_until(frameStart + std::chrono::milliseconds(16));
+        limiter.wait(frameStart, Application::targetFramerate);
     }
     return 0;
 }

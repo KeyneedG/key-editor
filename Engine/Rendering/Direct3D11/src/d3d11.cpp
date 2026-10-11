@@ -12,6 +12,7 @@
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 #include <cstring>
+#include <bit>
 #include <limits>
 #include <sstream>
 #include <unordered_map>
@@ -67,8 +68,13 @@ Matrix viewProjection(const Transform& transform, const Camera& camera, int widt
     }
     return multiply(projection, view);
 }
-struct DrawConstants { Matrix world, viewProjection; float color[4]; };
-static_assert(sizeof(DrawConstants) % 16 == 0);
+struct InstanceData {
+    Matrix world;
+    float color[4], rect[4]{};
+    std::uint32_t ink[4]{};
+    float quadZ = 0;
+};
+static_assert(sizeof(Matrix) == 64 && sizeof(InstanceData) == 116);
 
 class D3D11Renderer final : public RenderBackend {
 public:
@@ -86,6 +92,7 @@ public:
     int width() const override { return width_; }
     int height() const override { return height_; }
     const char* name() const override { return name_.c_str(); }
+    graphics::RenderStats stats() const override { return stats_; }
 
     void resize(int w, int h) override {
         if (w <= 0 || h <= 0) throw std::invalid_argument("Renderer dimensions must be positive");
@@ -107,6 +114,7 @@ public:
     }
 
     void render(const Scene& scene, Color background) override {
+        stats_ = {};
         ID3D11ShaderResourceView* none = nullptr; context_->PSSetShaderResources(0, 1, &none);
         auto* target = target_.Get(); context_->OMSetRenderTargets(1, &target, depth_.Get());
         D3D11_VIEWPORT viewport{0, 0, float(width_), float(height_), 0, 1}; context_->RSSetViewports(1, &viewport);
@@ -117,7 +125,6 @@ public:
         auto* constants = constants_.Get(); context_->VSSetConstantBuffers(0, 1, &constants); context_->PSSetConstantBuffers(0, 1, &constants);
         const float clear[]{background.r / 255.f, background.g / 255.f, background.b / 255.f, 1};
         context_->ClearRenderTargetView(target_.Get(), clear);
-        for (auto it = meshes_.begin(); it != meshes_.end();) { if (it->second.owner.expired()) it = meshes_.erase(it); else ++it; }
         struct View { const Camera* camera; const Transform* transform; };
         struct Draw { const MeshRenderer* visual; Matrix world; std::uint32_t layer; };
         std::vector<View> views; std::vector<Draw> draws;
@@ -132,20 +139,69 @@ public:
         }
         std::stable_sort(views.begin(), views.end(), [](const View& a, const View& b) { return a.camera->depth < b.camera->depth; });
         for (const auto& view : views) {
+            ++stats_.cameras;
             const auto projection = viewProjection(*view.transform, *view.camera, width_, height_);
             if (view.camera->clearColor) context_->ClearRenderTargetView(target_.Get(), clear);
             context_->ClearDepthStencilView(depth_.Get(), D3D11_CLEAR_DEPTH, 1, 0);
+            context_->UpdateSubresource(constants_.Get(), 0, nullptr, &projection, 0, 0);
+            struct Batch { std::shared_ptr<GpuMesh> mesh; std::size_t first, count; };
+            std::vector<Batch> batches;
+            std::vector<InstanceData> instances;
+            std::vector<graphics::ClipPlane> planes;
             for (const auto& draw : draws) {
                 if (!(view.camera->layers & draw.layer)) continue;
-                auto& geometry = meshBuffer(draw.visual->mesh);
-                DrawConstants data{draw.world, projection, {draw.visual->color.r / 255.f, draw.visual->color.g / 255.f,
+                ++stats_.meshSubmissions;
+                InstanceData data{draw.world, {draw.visual->color.r / 255.f, draw.visual->color.g / 255.f,
                     draw.visual->color.b / 255.f, draw.visual->unlit ? 1.f : 0.f}};
-                context_->UpdateSubresource(constants_.Get(), 0, nullptr, &data, 0, 0);
-                auto* vertices = geometry.vertices.Get(); UINT stride = sizeof(Vector3), offset = 0;
-                context_->IASetVertexBuffers(0, 1, &vertices, &stride, &offset);
-                context_->IASetIndexBuffer(geometry.indices.Get(), DXGI_FORMAT_R32_UINT, 0);
-                context_->DrawIndexed(geometry.count, 0, 0);
+                const auto& source = *draw.visual->mesh;
+                auto mesh = meshBuffer(source.quads.empty() ? draw.visual->mesh : quadMesh_);
+                const auto append = [&](const InstanceData& instance) {
+                    // Only merge consecutive geometry, preserving equal-depth draw order.
+                    if (batches.empty() || batches.back().mesh != mesh) batches.push_back({mesh, instances.size(), 0});
+                    ++batches.back().count; instances.push_back(instance);
+                };
+                if (source.quads.empty()) append(data);
+                else {
+                    if (planes.size() > std::numeric_limits<UINT>::max() - source.clipPlanes.size()) throw std::invalid_argument("Too many UI clipping planes");
+                    const auto firstPlane = UINT(planes.size());
+                    planes.insert(planes.end(), source.clipPlanes.begin(), source.clipPlanes.end());
+                    for (const auto& q : source.quads) {
+                        data.rect[0] = q.x; data.rect[1] = q.y; data.rect[2] = q.width; data.rect[3] = q.height;
+                        data.quadZ = q.z; data.ink[0] = q.inkLow; data.ink[1] = q.inkHigh;
+                        data.ink[2] = firstPlane; data.ink[3] = UINT(source.clipPlanes.size());
+                        append(data);
+                        if (q.inkHigh & 0x80000000u) ++stats_.glyphInstances;
+                    }
+                }
             }
+            if (instances.empty()) continue;
+            uploadBuffer(instances.data(), instances.size(), sizeof(InstanceData), D3D11_BIND_VERTEX_BUFFER, instances_, instanceCapacity_);
+            if (planes.empty()) planes.push_back({0, 0, 0, 1});
+            if (uploadBuffer(planes.data(), planes.size(), sizeof(graphics::ClipPlane), D3D11_BIND_SHADER_RESOURCE, clips_, clipCapacity_)) {
+                D3D11_SHADER_RESOURCE_VIEW_DESC desc{}; desc.Format = DXGI_FORMAT_UNKNOWN; desc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+                desc.Buffer.NumElements = clipCapacity_;
+                clipSource_.Reset(); require(device_->CreateShaderResourceView(clips_.Get(), &desc, &clipSource_), "create clipping source");
+            }
+            auto* clips = clipSource_.Get(); context_->PSSetShaderResources(1, 1, &clips);
+            for (const auto& batch : batches) {
+                ID3D11Buffer* vertices[]{batch.mesh->vertices.Get(), instances_.Get()};
+                const UINT strides[]{sizeof(Vector3), sizeof(InstanceData)}, offsets[]{0, UINT(batch.first * sizeof(InstanceData))};
+                context_->IASetVertexBuffers(0, 2, vertices, strides, offsets);
+                context_->IASetIndexBuffer(batch.mesh->indices.Get(), DXGI_FORMAT_R32_UINT, 0);
+                context_->DrawIndexedInstanced(batch.mesh->count, UINT(batch.count), 0, 0, 0);
+                ++stats_.batches;
+                stats_.instances += batch.count;
+                if (batch.count > 1) ++stats_.instancedBatches;
+                stats_.triangles += batch.mesh->count / 3 * batch.count;
+                stats_.vertices += batch.mesh->vertexCount * batch.count;
+            }
+        }
+        // New scene/UI snapshots can reuse old geometry before expired source entries are removed.
+        for (auto it = meshes_.begin(); it != meshes_.end();) { if (it->second.owner.expired()) it = meshes_.erase(it); else ++it; }
+        for (auto it = geometry_.begin(); it != geometry_.end();) {
+            auto& bucket = it->second;
+            std::erase_if(bucket, [](const auto& mesh) { return mesh.expired(); });
+            if (bucket.empty()) it = geometry_.erase(it); else ++it;
         }
     }
 
@@ -165,7 +221,7 @@ public:
             context_->PSSetShaderResources(0, 1, &source); context_->PSSetSamplers(0, 1, &sampler); context_->Draw(3, 0);
             source = nullptr; context_->PSSetShaderResources(0, 1, &source);
         }
-        require(swap_->Present(1, 0), "present frame");
+        require(swap_->Present(Application::vSync ? 1 : 0, 0), "present frame");
     }
 
     std::vector<std::uint32_t> readPixels() override {
@@ -188,44 +244,87 @@ public:
 
 private:
     struct GpuMesh {
-        std::weak_ptr<const Mesh> owner;
         ComPtr<ID3D11Buffer> vertices, indices;
+        std::vector<Vector3> positions;
+        std::vector<std::array<std::size_t, 3>> triangles;
         UINT count = 0;
         std::size_t vertexCount = 0;
+    };
+    struct CachedMesh {
+        std::weak_ptr<const Mesh> owner;
+        std::shared_ptr<GpuMesh> geometry;
         std::uint64_t revision = 0;
     };
-    GpuMesh& meshBuffer(const std::shared_ptr<const Mesh>& mesh) {
+    std::shared_ptr<GpuMesh> meshBuffer(const std::shared_ptr<const Mesh>& mesh) {
         const auto found = meshes_.find(mesh.get());
         if (found != meshes_.end() && !found->second.owner.expired() && found->second.revision == mesh->revision &&
-            found->second.vertexCount == mesh->vertices.size() && found->second.count == mesh->triangles.size() * 3) return found->second;
+            found->second.geometry->vertexCount == mesh->vertices.size() && found->second.geometry->count == mesh->triangles.size() * 3) return found->second.geometry;
         if (mesh->vertices.size() > std::numeric_limits<UINT>::max() / sizeof(Vector3) ||
             mesh->triangles.size() > std::numeric_limits<UINT>::max() / (3 * sizeof(std::uint32_t)))
             throw std::invalid_argument("Mesh exceeds Direct3D buffer limits");
+        std::uint64_t hash = 14695981039346656037ull;
+        const auto add = [&](std::uint64_t value) { hash ^= value; hash *= 1099511628211ull; };
+        add(mesh->vertices.size()); add(mesh->triangles.size());
+        for (auto v : mesh->vertices) { add(std::bit_cast<std::uint32_t>(v.x)); add(std::bit_cast<std::uint32_t>(v.y)); add(std::bit_cast<std::uint32_t>(v.z)); }
+        for (auto triangle : mesh->triangles) for (auto index : triangle) add(index);
+        auto& bucket = geometry_[hash];
+        for (const auto& item : bucket) if (auto shared = item.lock(); shared && shared->triangles == mesh->triangles &&
+            shared->positions.size() == mesh->vertices.size() && std::equal(shared->positions.begin(), shared->positions.end(), mesh->vertices.begin(),
+                [](Vector3 a, Vector3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; })) {
+            meshes_.insert_or_assign(mesh.get(), CachedMesh{mesh, shared, mesh->revision}); return shared;
+        }
         std::vector<std::uint32_t> indices; indices.reserve(mesh->triangles.size() * 3);
         for (auto triangle : mesh->triangles) for (auto index : triangle) {
             if (index >= mesh->vertices.size()) throw std::invalid_argument("Mesh index out of bounds");
             indices.push_back(static_cast<std::uint32_t>(index));
         }
-        GpuMesh result; result.owner = mesh; result.count = UINT(indices.size());
-        result.vertexCount = mesh->vertices.size(); result.revision = mesh->revision;
+        auto result = std::make_shared<GpuMesh>(); result->count = UINT(indices.size()); result->vertexCount = mesh->vertices.size();
+        result->positions = mesh->vertices; result->triangles = mesh->triangles;
         D3D11_BUFFER_DESC desc{}; desc.Usage = D3D11_USAGE_IMMUTABLE; desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
         desc.ByteWidth = UINT(mesh->vertices.size() * sizeof(Vector3));
         D3D11_SUBRESOURCE_DATA data{}; data.pSysMem = mesh->vertices.data();
-        require(device_->CreateBuffer(&desc, &data, &result.vertices), "upload vertices");
+        require(device_->CreateBuffer(&desc, &data, &result->vertices), "upload vertices");
         desc.BindFlags = D3D11_BIND_INDEX_BUFFER; desc.ByteWidth = UINT(indices.size() * sizeof(std::uint32_t)); data.pSysMem = indices.data();
-        require(device_->CreateBuffer(&desc, &data, &result.indices), "upload indices");
-        return meshes_.insert_or_assign(mesh.get(), std::move(result)).first->second;
+        require(device_->CreateBuffer(&desc, &data, &result->indices), "upload indices");
+        ++stats_.meshUploads;
+        bucket.push_back(result); meshes_.insert_or_assign(mesh.get(), CachedMesh{mesh, result, mesh->revision}); return result;
+    }
+    bool uploadBuffer(const void* data, std::size_t count, UINT stride, UINT bind, ComPtr<ID3D11Buffer>& buffer, UINT& capacity) {
+        const auto maximum = std::numeric_limits<UINT>::max() / stride;
+        if (count > maximum) throw std::invalid_argument("Instance data exceeds Direct3D buffer limits");
+        const bool grow = count > capacity;
+        if (grow) {
+            const UINT next = UINT(std::min<std::size_t>(maximum, std::max(count, std::max<std::size_t>(64, std::size_t(capacity) * 2))));
+            D3D11_BUFFER_DESC desc{}; desc.ByteWidth = next * stride; desc.Usage = D3D11_USAGE_DYNAMIC;
+            desc.BindFlags = bind; desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+            if (bind == D3D11_BIND_SHADER_RESOURCE) { desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED; desc.StructureByteStride = stride; }
+            ComPtr<ID3D11Buffer> result; require(device_->CreateBuffer(&desc, nullptr, &result), "create instance/clip buffer");
+            buffer = std::move(result); capacity = next;
+        }
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        require(context_->Map(buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped), "upload instance/clip data");
+        std::memcpy(mapped.pData, data, count * stride); context_->Unmap(buffer.Get(), 0);
+        return grow;
     }
     void createPipeline() {
         auto vs = compile(shaders::scene, "VS", "vs_5_0"), ps = compile(shaders::scene, "PS", "ps_5_0");
         require(device_->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, &vertex_), "create vertex shader");
         require(device_->CreatePixelShader(ps->GetBufferPointer(), ps->GetBufferSize(), nullptr, &pixel_), "create pixel shader");
-        D3D11_INPUT_ELEMENT_DESC element{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0};
-        require(device_->CreateInputLayout(&element, 1, vs->GetBufferPointer(), vs->GetBufferSize(), &layout_), "create input layout");
+        const D3D11_INPUT_ELEMENT_DESC elements[]{
+            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"WORLD", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 0, D3D11_INPUT_PER_INSTANCE_DATA, 1},
+            {"WORLD", 1, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 16, D3D11_INPUT_PER_INSTANCE_DATA, 1},
+            {"WORLD", 2, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 32, D3D11_INPUT_PER_INSTANCE_DATA, 1},
+            {"WORLD", 3, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 48, D3D11_INPUT_PER_INSTANCE_DATA, 1},
+            {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, offsetof(InstanceData, color), D3D11_INPUT_PER_INSTANCE_DATA, 1},
+            {"RECT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, offsetof(InstanceData, rect), D3D11_INPUT_PER_INSTANCE_DATA, 1},
+            {"INK", 0, DXGI_FORMAT_R32G32B32A32_UINT, 1, offsetof(InstanceData, ink), D3D11_INPUT_PER_INSTANCE_DATA, 1},
+            {"QUADZ", 0, DXGI_FORMAT_R32_FLOAT, 1, offsetof(InstanceData, quadZ), D3D11_INPUT_PER_INSTANCE_DATA, 1}};
+        require(device_->CreateInputLayout(elements, UINT(std::size(elements)), vs->GetBufferPointer(), vs->GetBufferSize(), &layout_), "create instance input layout");
         vs = compile(shaders::present, "VS", "vs_5_0"); ps = compile(shaders::present, "PS", "ps_5_0");
         require(device_->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, &presentVertex_), "create presentation vertex shader");
         require(device_->CreatePixelShader(ps->GetBufferPointer(), ps->GetBufferSize(), nullptr, &presentPixel_), "create presentation pixel shader");
-        D3D11_BUFFER_DESC buffer{}; buffer.ByteWidth = sizeof(DrawConstants); buffer.Usage = D3D11_USAGE_DEFAULT; buffer.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        D3D11_BUFFER_DESC buffer{}; buffer.ByteWidth = sizeof(Matrix); buffer.Usage = D3D11_USAGE_DEFAULT; buffer.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
         require(device_->CreateBuffer(&buffer, nullptr, &constants_), "create draw constants");
         D3D11_RASTERIZER_DESC raster{}; raster.FillMode = D3D11_FILL_SOLID; raster.CullMode = D3D11_CULL_BACK; raster.DepthClipEnable = TRUE;
         require(device_->CreateRasterizerState(&raster, &raster_), "create raster state");
@@ -261,21 +360,28 @@ private:
     HWND window_ = nullptr;
     int width_ = 0, height_ = 0, clientWidth_ = 0, clientHeight_ = 0;
     std::string name_;
+    graphics::RenderStats stats_;
     ComPtr<ID3D11Device> device_;
     ComPtr<ID3D11DeviceContext> context_;
     ComPtr<IDXGISwapChain1> swap_;
     ComPtr<ID3D11Texture2D> frame_, staging_;
     ComPtr<ID3D11RenderTargetView> target_, back_;
     ComPtr<ID3D11ShaderResourceView> source_;
+    ComPtr<ID3D11ShaderResourceView> clipSource_;
     ComPtr<ID3D11DepthStencilView> depth_;
     ComPtr<ID3D11VertexShader> vertex_, presentVertex_;
     ComPtr<ID3D11PixelShader> pixel_, presentPixel_;
     ComPtr<ID3D11InputLayout> layout_;
     ComPtr<ID3D11Buffer> constants_;
+    ComPtr<ID3D11Buffer> instances_, clips_;
+    UINT instanceCapacity_ = 0, clipCapacity_ = 0;
     ComPtr<ID3D11RasterizerState> raster_;
     ComPtr<ID3D11DepthStencilState> depthState_, noDepth_;
     ComPtr<ID3D11SamplerState> sampler_;
-    std::unordered_map<const Mesh*, GpuMesh> meshes_;
+    std::unordered_map<const Mesh*, CachedMesh> meshes_;
+    std::unordered_map<std::uint64_t, std::vector<std::weak_ptr<GpuMesh>>> geometry_;
+    std::shared_ptr<const Mesh> quadMesh_ = std::make_shared<Mesh>(Mesh{
+        {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}}, {{0, 2, 1}, {0, 3, 2}}});
 };
 }
 std::unique_ptr<RenderBackend> createRenderer(void* window, int width, int height, Options options) {

@@ -144,13 +144,27 @@ physics, and game updates while editing.
   index (-1 means no parent), and built-in component properties. Rotation fields
   use degrees; vectors are X/Y/Z and colors are R/G/B. Add or remove components.
   Camera/content reference fields use scene entity indices (-1 means no reference).
-- **Project:** double-click folders to browse and scene JSON files to load them;
+- **Project:** starts inside Assets, creating the folder when opening a project
+  without it. Double-click folders to browse and scene JSON files to load them;
   Refresh reloads the directory listing. Wheel-scroll each panel independently.
 - **Scene view:** click a mesh to select it. Use W/E/R or the toolbar to move,
   rotate, or scale; drag the colored primitive handles. Each drag is one undo
-  step; Escape cancels it. F frames the selection. Hold the right mouse button
-  to look and fly with WASD/QE; Shift speeds up movement. The wheel moves forward
+  step; Escape cancels it. F frames the selection. Press and hold the right mouse
+  button inside the scene view to capture the cursor, look, and fly with WASD/QE;
+  Shift speeds up movement. Pitch can turn through a full circle. Release the
+  button, lose focus, or press Escape to release capture. The wheel moves forward
   and backward.
+- **World / Local:** switch the transform gizmos between scene axes and the
+  selected object's rotation, including its parents. Inspector values remain
+  local. World scaling projects the stretch onto the existing local scale axes;
+  the engine's position/rotation/scale transforms do not store shear.
+- **Stats:** show or hide frame FPS/ms, CPU update/render time, presentation time,
+  batches/draws, instances/glyphs, instanced batches/saved draws, submitted
+  triangles/vertices, cameras, GPU mesh uploads, and
+  resolution. Values refresh four times per second and include editor UI/gizmos.
+  Batches count actual draw calls; saved draws compare them with one draw per
+  original mesh submission. Presentation
+  time includes vsync waiting; CPU render time is submission time, not GPU time.
 
 Input fields commit on Enter or focus loss and restore their previous value on
 Escape. Clicking a field selects its text; Ctrl+A selects all. Arrow keys,
@@ -203,10 +217,22 @@ Engine/build/GCC/Release/tiny3d_project.exe --frames 60 --renderer software
 Direct3D types, resources, HLSL shaders, and swap-chain handling live entirely
 inside `Rendering/Direct3D11`, built as `tiny3d_d3d11`. It supports the existing
 perspective/orthographic cameras, layer masks, depth ordering, color clearing,
-parent transforms, flat lighting, unlit UI, and letterboxing. Meshes are uploaded
-once and cached while alive. When editing a shared mesh's arrays in place, call
+parent transforms, flat lighting, unlit UI, and letterboxing. Consecutive meshes
+with identical geometry use `DrawIndexedInstanced`, including independently
+created or scene-loaded cubes. Transform, color, and unlit/lit mode are instance
+data, so different colors do not break a batch. Order stays unchanged for
+coplanar surfaces, and camera passes/layers remain separate. Meshes are uploaded
+once, shared by geometry, and cached while alive. When editing a shared mesh's arrays in place, call
 `mesh.markChanged()` afterwards; replacing the mesh also updates its GPU buffers.
 Unchanged UI text and scroll clipping retain their meshes between frames.
+UI images and font characters are instances of one shared quad. The pixel shader
+reads the existing 5x7 font bits per character and applies local clipping planes
+for input fields and nested scroll rectangles, including rotated/scaled parents.
+There is no atlas or new font dependency. UI-generated meshes carry optional
+quad/clipping hints; their ordinary triangles remain available for software
+rendering. `markChanged()` clears these hints when geometry is edited. Scene
+loading rebuilds them from UI components. The current opaque renderer batches
+consecutive matching geometry, without sorting or a separate material system.
 
 The engine's `tiny3d/graphics.hpp` defines the small `RenderBackend` interface:
 resize, render, present, dimensions, and explicit pixel readback. The window loop
@@ -616,6 +642,25 @@ restores the previous position and the selected client size. Manual resizing
 letterboxes the rendered image until you request a different resolution.
 The backend updates `Input::viewport` for correct UI clicks. Settings remain in
 memory for the current run; persistence is up to your game.
+
+Frame pacing uses shared static settings, available to games, the editor, and
+EryScript through `Application`:
+
+```cpp
+tiny3d::Application::targetFramerate = 0; // Default: no FPS limit.
+tiny3d::Application::targetFramerate = 60; // Target 60 frames per second.
+tiny3d::Application::vSync = false; // Default: presentation does not wait for VSync.
+tiny3d::Application::vSync = true; // Synchronize Direct3D presentation with the monitor.
+```
+
+Changes take effect during the current run. A positive target limits the entire
+frame to `1 / targetFramerate` seconds, waiting only for its remaining time;
+zero or negative values disable that wait. Windows uses a reusable high-resolution
+waitable timer when available, avoiding coarse sleep rounding. The former fixed
+16 ms limiter is removed. VSync is independent: enabling it may still limit
+presentation to the monitor's refresh rate even with a zero FPS target. The software/GDI backend
+supports the FPS target but cannot control VSync. These settings are not saved
+into scene or project files.
 
 ## Direct CMake build
 

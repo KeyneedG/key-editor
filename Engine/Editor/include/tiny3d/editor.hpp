@@ -11,9 +11,11 @@ public:
     Editor(Scene initial, std::filesystem::path engineDirectory, std::filesystem::path projectDirectory = {},
            std::filesystem::path configFile = {});
     void update(float seconds, const Input& input) override;
+    void frameRendered(const graphics::FrameStats& stats) override;
     Scene& scene() override { return view_; }
     const Scene& scene() const override { return view_; }
     bool executeScripts() const override { return false; }
+    bool captureMouse() const override { return looking_; }
     ScreenSettings screenSettings() const override { return {1280, 800, false}; }
     std::string title() const override;
 
@@ -34,6 +36,7 @@ public:
 
 private:
     enum class Tool { Move, Rotate, Scale };
+    enum class Space { World, Local };
     enum class Dialog { None, NewProject, NewScene, BuildSettings, About, AddObject, AddComponent, Unsaved };
     void rebuild();
     void replace(Scene scene, const std::filesystem::path& path);
@@ -44,6 +47,7 @@ private:
     void projectPanel(Entity& root);
     void dialog(Entity& root);
     void gizmos();
+    void refreshStats();
     void viewportInput(float seconds, const Input& input);
     Entity& element(Entity& parent, float x, float y, float z = -.05f);
     Entity& label(Entity& parent, float x, float y, std::string text, float size = 1.5f);
@@ -62,9 +66,18 @@ private:
     std::function<void()> pending_;
     Dialog dialog_ = Dialog::None;
     Tool tool_ = Tool::Move;
+    Space space_ = Space::World;
     Transform camera_;
+    float cameraYaw_ = 0, cameraPitch_ = .18f;
+    bool looking_ = false;
     float time_ = 0, lastClick_ = -1;
     bool rebuild_ = true;
+    bool statsVisible_ = false;
+    Entity* statsPanel_ = nullptr;
+    SimpleText* statsText_ = nullptr;
+    graphics::FrameStats stats_;
+    float sampleSeconds_ = 0, sampleUpdate_ = 0, sampleRender_ = 0, samplePresent_ = 0;
+    unsigned sampleFrames_ = 0;
     Entity* viewportCamera_ = nullptr;
     std::array<Entity*, 3> scrolls_{};
     std::array<float, 3> offsets_{};
@@ -73,6 +86,7 @@ private:
     std::string dragBefore_;
     Vector3 dragMouse_{}, dragPosition_{}, dragScale_{};
     Vector3 dragScreenAxis_{};
+    Vector3 dragWorldAxis_{}, dragScaleWeights_{};
     Quaternion dragRotation_{};
     float dragUnits_ = .01f;
 };

@@ -27,6 +27,7 @@ public:
     int width() const override { return renderer_.width(); }
     int height() const override { return renderer_.height(); }
     const char* name() const override { return "Software"; }
+    graphics::RenderStats stats() const override { return renderer_.stats(); }
     void render(const Scene& scene, Color background) override { renderer_.render(scene, background); }
     std::vector<std::uint32_t> readPixels() override { return renderer_.pixels(); }
     void present(int w, int h) override {

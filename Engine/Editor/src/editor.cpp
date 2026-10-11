@@ -70,10 +70,11 @@ bool project(Vector3 world, const Transform& camera, Vector3& screen) {
 Editor::Editor(Scene initial, fs::path engineDirectory, fs::path projectDirectory, fs::path configFile)
     : content_(std::move(initial)), engine_(fs::absolute(engineDirectory)), config_(std::move(configFile)), project_(std::move(projectDirectory)) {
     fs::create_directories(engine_ / "Projects");
-    camera_.localPosition = {0, 3, -9}; camera_.localRotation = Quaternion::fromEuler({.18f, 0, 0});
+    camera_.localPosition = {0, 3, -9}; camera_.localRotation = Quaternion::fromEuler({cameraPitch_, cameraYaw_, 0});
     if (!project_.empty()) {
         project_ = fs::absolute(project_); assets_ = project_ / "Assets";
-        folder_ = fs::exists(assets_) ? assets_ : project_;
+        fs::create_directories(assets_);
+        folder_ = assets_;
         const auto manifest = project_ / "project.json";
         if (fs::exists(manifest)) {
             const auto settings = readJson(manifest);
@@ -265,7 +266,8 @@ void Editor::rebuild() {
     std::string focusText;
     if (auto* focused = ui_.focusedEntity()) { focusPosition = focused->transform.position(); focusText = focused->getComponent<InputField>()->text; }
     for (int i = 0; i < 3; ++i) if (scrolls_[i]) offsets_[i] = scrolls_[i]->getComponent<ScrollRect>()->offset;
-    ui_.cancel(); view_ = deserializeScene(current_); scrolls_.fill(nullptr); handles_.fill(nullptr);
+    ui_.cancel(); statsPanel_ = nullptr; statsText_ = nullptr;
+    view_ = deserializeScene(current_); scrolls_.fill(nullptr); handles_.fill(nullptr);
     // Disable scene cameras and interactions in the editor's presentation copy.
     for (auto& e : view_.entities) {
         e.layer = 0;
@@ -310,9 +312,20 @@ void Editor::rebuild() {
             [this, i] { tool_ = static_cast<Tool>(i); rebuild_ = true; });
         b.getComponent<Button>()->normalColor = int(tool_) == i ? accent : panelColor;
     }
-    label(tools, 216, 0, "RMB LOOK | WASD | F FRAME", 1.1f);
+    button(tools, 6, 0, 88, space_ == Space::World ? "World" : "Local",
+        [this] { space_ = space_ == Space::World ? Space::Local : Space::World; rebuild_ = true; });
+    auto& statsButton = button(tools, 100, 0, 88, "Stats", [this] { statsVisible_ = !statsVisible_; rebuild_ = true; });
+    statsButton.getComponent<Button>()->normalColor = statsVisible_ ? accent : panelColor;
+    label(tools, 250, 0, "RMB LOOK | F FRAME", 1.f);
     auto& project = panel(root, 0, -260, 1280, 230); projectPanel(project);
     auto& status = panel(root, 0, -387, 1280, 26, {22, 27, 36}); label(status, 0, 0, shortText(status_, 130), 1.3f);
+    if (statsVisible_) {
+        statsPanel_ = &panel(root, 154, 172, 304, 300, {22, 27, 36}); statsPanel_->transform.localPosition.z = -2;
+        label(*statsPanel_, 0, 130, "Rendering stats", 1.4f);
+        statsText_ = label(*statsPanel_, -138, 106, "", 1.25f).getComponent<SimpleText>();
+        statsText_->centered = false;
+        refreshStats();
+    }
     if (!menu_.empty()) {
         const float x = menu_ == "File" ? -520 : menu_ == "Edit" ? -436 : -352;
         auto& popup = panel(root, x, 280, 220, menu_ == "File" ? 150 : menu_ == "Edit" ? 116 : 50); popup.transform.localPosition.z = -4;
@@ -341,7 +354,7 @@ void Editor::projectPanel(Entity& root) {
     label(root, 65, 96, project_.empty() ? "Create or open a project from File" : shortText(fs::relative(folder_, project_).generic_string(), 90), 1.3f);
     button(root, 578, 96, 94, "Refresh", [this] { rebuild_ = true; });
     if (project_.empty()) return;
-    const auto browserRoot = fs::is_directory(assets_) ? assets_ : project_;
+    const auto& browserRoot = assets_;
     std::vector<fs::directory_entry> entries;
     for (const auto& e : fs::directory_iterator(folder_)) if (!e.is_symlink() && e.path().filename() != "build" && e.path().filename() != ".vs") entries.push_back(e);
     std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
@@ -402,8 +415,9 @@ void Editor::gizmos() {
     const auto& transform = content_.entities[*selected_].transform;
     Vector3 center = transform.position();
     const float size = std::max(.3f, length(center - camera_.position()) * .09f);
+    const Quaternion basis = space_ == Space::Local ? transform.rotation() : Quaternion{};
     for (int i = 0; i < 3; ++i) {
-        Vector3 direction = tool_ == Tool::Scale ? rotate(axes[i], transform.rotation()) : axes[i];
+        Vector3 direction = axes[i];
         auto mesh = std::make_shared<Mesh>();
         if (tool_ == Tool::Rotate) {
             Vector3 u = axes[(i + 1) % 3], v = axes[(i + 2) % 3];
@@ -419,23 +433,35 @@ void Editor::gizmos() {
             appendBox(*mesh, direction * size, {size * tip, size * tip, size * tip});
         }
         auto& handle = view_.entities.emplace_back(); handle.layer = 30; handle.transform.localPosition = center;
+        handle.transform.localRotation = basis;
         auto& visual = handle.addComponent<MeshRenderer>(mesh, colors[i]); visual.unlit = true; handles_[i] = &handle;
     }
 }
 
 void Editor::viewportInput(float seconds, const Input& input) {
-    if (input.viewport.width <= 0 || input.viewport.height <= 0) return;
+    if (input.viewport.width <= 0 || input.viewport.height <= 0) { looking_ = false; return; }
     Vector3 mouse{float(input.mouseX - input.viewport.x) * 1280 / input.viewport.width,
                  float(input.mouseY - input.viewport.y) * 800 / input.viewport.height, 0};
     bool over = mouse.x > 220 && mouse.x < 960 && mouse.y > 74 && mouse.y < 544;
+    if (statsPanel_) {
+        const auto p = statsPanel_->transform.position(); const auto* rect = statsPanel_->getComponent<Image>();
+        if (std::abs(mouse.x - (640 + p.x)) <= rect->width * .5f && std::abs(mouse.y - (400 - p.y)) <= rect->height * .5f) over = false;
+    }
     if (dragging_ >= 0) {
+        looking_ = false;
         if (!selected_) return;
         auto& t = content_.entities[*selected_].transform;
         const float amount = dot(mouse - dragMouse_, dragScreenAxis_);
         if (input.pressed(Key::Escape)) { content_ = deserializeScene(dragBefore_); current_ = dragBefore_; dragging_ = -1; rebuild_ = true; return; }
-        if (tool_ == Tool::Move) t.setPosition(dragPosition_ + axes[dragging_] * (amount * dragUnits_));
-        else if (tool_ == Tool::Rotate) t.setRotation(Quaternion::axisAngle(axes[dragging_], amount * .01f) * dragRotation_);
-        else { t.localScale = dragScale_; axis(t.localScale, dragging_) = axis(dragScale_, dragging_) + amount * .01f; }
+        if (tool_ == Tool::Move) t.setPosition(dragPosition_ + dragWorldAxis_ * (amount * dragUnits_));
+        else if (tool_ == Tool::Rotate) t.setRotation(Quaternion::axisAngle(dragWorldAxis_, amount * .01f) * dragRotation_);
+        else if (space_ == Space::Local) { t.localScale = dragScale_; axis(t.localScale, dragging_) = axis(dragScale_, dragging_) + amount * .01f; }
+        else {
+            // Project a world-axis stretch onto the existing TRS axes, without introducing shear.
+            const float factor = std::max(.01f, 1 + amount * .01f);
+            for (int i = 0; i < 3; ++i)
+                axis(t.localScale, i) = axis(dragScale_, i) * std::sqrt(std::max(0.f, 1 + (factor * factor - 1) * axis(dragScaleWeights_, i)));
+        }
         current_ = serializeScene(content_); rebuild_ = true;
         if (!input.held(MouseButton::Left) || !input.focused) {
             if (current_ != dragBefore_) { undo_.push_back(dragBefore_); if (undo_.size() > 64) undo_.erase(undo_.begin()); redo_.clear(); }
@@ -443,19 +469,29 @@ void Editor::viewportInput(float seconds, const Input& input) {
         }
         return;
     }
-    if (!input.focused || dialog_ != Dialog::None || !menu_.empty() || ui_.editingText()) return;
-    if (over && input.held(MouseButton::Right)) {
-        auto euler = camera_.localRotation.toEuler();
-        euler.y += input.mouseDeltaX * .003f; euler.x = std::clamp(euler.x + input.mouseDeltaY * .003f, -1.4f, 1.4f);
-        camera_.localRotation = Quaternion::fromEuler(euler);
+    if (!input.focused || dialog_ != Dialog::None || !menu_.empty() || ui_.editingText()) { looking_ = false; return; }
+    if (!input.held(MouseButton::Right) || input.pressed(Key::Escape)) looking_ = false;
+    const bool beginLook = over && input.pressed(MouseButton::Right) && input.held(MouseButton::Right) &&
+        !input.held(MouseButton::Left) && !input.pressed(Key::Escape);
+    if (beginLook) looking_ = true;
+    if (looking_) {
+        // Keep the angles rather than recovering Euler values from a quaternion at each frame.
+        // Wrap for precision, without limiting pitch; yaw stays on world Y and pitch on local X.
+        if (!beginLook && (input.mouseDeltaX != 0 || input.mouseDeltaY != 0)) {
+            cameraYaw_ = std::remainder(cameraYaw_ + input.mouseDeltaX * .003f, 2 * pi);
+            cameraPitch_ = std::remainder(cameraPitch_ + input.mouseDeltaY * .003f, 2 * pi);
+            camera_.localRotation = Quaternion::fromEuler({cameraPitch_, cameraYaw_, 0});
+            rebuild_ = true;
+        }
         const auto a = [&](Key positive, Key negative) { return float(input.held(positive)) - float(input.held(negative)); };
-        camera_.localPosition = camera_.localPosition + rotate(Vector3{a(Key::D, Key::A), a(Key::E, Key::Q), a(Key::W, Key::S)}, camera_.rotation()) * (seconds * (input.held(Key::Shift) ? 18 : 6));
-        rebuild_ = true;
+        const auto movement = rotate(Vector3{a(Key::D, Key::A), a(Key::E, Key::Q), a(Key::W, Key::S)}, camera_.rotation()) * (seconds * (input.held(Key::Shift) ? 18 : 6));
+        if (length(movement) > 0) { camera_.localPosition = camera_.localPosition + movement; rebuild_ = true; }
     } else {
         if (input.pressed(Key::W) && !input.held(Key::Control)) { tool_ = Tool::Move; rebuild_ = true; }
         if (input.pressed(Key::E)) { tool_ = Tool::Rotate; rebuild_ = true; }
         if (input.pressed(Key::R)) { tool_ = Tool::Scale; rebuild_ = true; }
     }
+    if (looking_) return;
     if (input.pressed(Key::F) && selected_) {
         const auto& t = content_.entities[*selected_].transform;
         const float distance = std::max(4.f, length(t.lossyScale()) * 2);
@@ -475,7 +511,12 @@ void Editor::viewportInput(float seconds, const Input& input) {
         if (content_.entities[*selected_].parent()) content_.entities[*selected_].parent()->transform.inversePoint(t.position());
         dragging_ = picked; dragBefore_ = current_; dragMouse_ = mouse;
         dragPosition_ = t.position(); dragRotation_ = t.rotation(); dragScale_ = t.localScale;
-        Vector3 worldAxis = tool_ == Tool::Scale ? rotate(axes[picked], t.rotation()) : axes[picked];
+        const Vector3 worldAxis = space_ == Space::Local ? rotate(axes[picked], t.rotation()) : axes[picked];
+        dragWorldAxis_ = worldAxis;
+        for (int i = 0; i < 3; ++i) {
+            const float projection = dot(normalized(t.vector(axes[i])), worldAxis);
+            axis(dragScaleWeights_, i) = projection * projection;
+        }
         const float size = std::max(.3f, length(t.position() - origin) * .09f);
         Vector3 a, b;
         if (tool_ == Tool::Rotate) {
@@ -494,6 +535,38 @@ void Editor::viewportInput(float seconds, const Input& input) {
         }
         selected_ = selection; offsets_[1] = 0; if (scrolls_[1]) scrolls_[1]->getComponent<ScrollRect>()->offset = 0; rebuild_ = true;
     }
+}
+
+void Editor::refreshStats() {
+    if (!statsText_) return;
+    if (stats_.renderer.empty()) { statsText_->text = "Waiting for a rendered frame..."; return; }
+    const auto& r = stats_.rendering;
+    std::ostringstream text; text << std::fixed << std::setprecision(1);
+    text << stats_.renderer << "\n\n"
+         << "FPS: " << (stats_.frameSeconds > 0 ? 1 / stats_.frameSeconds : 0) << " | Frame: " << stats_.frameSeconds * 1000 << " ms\n\n"
+         << "CPU update: " << stats_.updateSeconds * 1000 << " ms\n\n"
+         << "CPU render: " << stats_.renderSeconds * 1000 << " ms\n\n"
+         << "Present: " << stats_.presentSeconds * 1000 << " ms\n\n"
+         << "Batches / draws: " << r.batches << "\n\n"
+         << "Instances: " << r.instances << " | Glyphs: " << r.glyphInstances << "\n\n"
+         << "Instanced: " << r.instancedBatches << " | Saved draws: " << (r.meshSubmissions > r.batches ? r.meshSubmissions - r.batches : 0) << "\n\n"
+         << "Triangles: " << r.triangles << "\n\n"
+         << "Vertices: " << r.vertices << "\n\n"
+         << "Cameras: " << r.cameras << " | GPU uploads: " << r.meshUploads << "\n\n"
+         << "Resolution: " << stats_.width << " x " << stats_.height;
+    statsText_->text = text.str();
+}
+
+void Editor::frameRendered(const graphics::FrameStats& frame) {
+    if (!(frame.frameSeconds > 0) || !std::isfinite(frame.frameSeconds)) return;
+    sampleSeconds_ += frame.frameSeconds; sampleUpdate_ += frame.updateSeconds;
+    sampleRender_ += frame.renderSeconds; samplePresent_ += frame.presentSeconds; ++sampleFrames_;
+    if (sampleSeconds_ < .25f && stats_.frameSeconds > 0) return;
+    stats_ = frame;
+    stats_.frameSeconds = sampleSeconds_ / sampleFrames_; stats_.updateSeconds = sampleUpdate_ / sampleFrames_;
+    stats_.renderSeconds = sampleRender_ / sampleFrames_; stats_.presentSeconds = samplePresent_ / sampleFrames_;
+    sampleSeconds_ = sampleUpdate_ = sampleRender_ = samplePresent_ = 0; sampleFrames_ = 0;
+    refreshStats();
 }
 
 void Editor::update(float seconds, const Input& input) {
