@@ -32,7 +32,7 @@ struct FrameStats {
 }
 
 // A small rendering boundary. Native handles and API resources stay in the backend.
-// Dimensions are the requested rendering resolution, independent of the window size.
+// Dimensions are the render target size; the native runtime follows the window client size.
 class RenderBackend {
 public:
     virtual ~RenderBackend() = default;

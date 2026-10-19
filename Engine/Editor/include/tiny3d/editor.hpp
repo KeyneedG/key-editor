@@ -60,6 +60,9 @@ private:
     void dialog(Entity& root);
     void gizmos();
     void refreshViewport();
+    void refreshComponentGizmos();
+    void resizeLayout(const Input& input);
+    void buildStatsPanel(Entity& root, float x, float y);
     void refreshStats();
     void viewportInput(float seconds, const Input& input);
     Entity& element(Entity& parent, float x, float y, float z = -.05f);
@@ -75,7 +78,7 @@ private:
     std::unique_ptr<Game> playGame_;
     Scripts playScripts_;
     std::filesystem::path factoryProject_, editDirectory_;
-    bool playPaused_ = false, playStep_ = false, playFocused_ = false;
+    bool playPaused_ = false, playStep_ = false, playFocused_ = false, playControlsDirty_ = false;
     int editTargetFramerate_ = 0;
     bool editVSync_ = false;
     SimpleText* pauseLabel_ = nullptr;
@@ -89,6 +92,10 @@ private:
     Tool tool_ = Tool::Move;
     Space space_ = Space::World;
     Transform camera_;
+    float layoutWidth_ = 1280, layoutHeight_ = 800;
+    GizmoOptions gizmoOptions_;
+    std::vector<GizmoLine> gizmoLines_;
+    std::vector<Entity*> componentGizmos_;
     float cameraYaw_ = 0, cameraPitch_ = .18f;
     bool looking_ = false;
     float time_ = 0, lastClick_ = -1;

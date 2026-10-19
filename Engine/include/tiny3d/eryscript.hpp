@@ -10,6 +10,7 @@ namespace detail { struct ScriptBindings; }
 
 struct EryScript : Component {
     std::string code;
+    std::string source; // Optional file relative to the project; loaded on initialization/restart.
     bool runOnAwake = true;
     bool runInUpdate = true;
 
@@ -26,7 +27,7 @@ private:
     friend class Scripts;
     eryscript::Runtime runtime_;
     std::shared_ptr<detail::ScriptBindings> bindings_;
-    std::string loadedSource_, error_;
+    std::string loadedSource_, loadedPath_, error_;
     bool initialized_ = false;
 };
 

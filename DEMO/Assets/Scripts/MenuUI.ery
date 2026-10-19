@@ -1,0 +1,143 @@
+using tiny3d
+specify name = "MenuUI"
+
+var menu
+var pauseMenu
+var settingsMenu
+var sizeLabel
+var modeLabel
+var mode = 0
+var pending = new ScreenSettings(800, 500, false)
+var sizes = new int[5,2]
+var sizeIndex = 0
+
+method Element(parent, name, x, y, z)
+    var item = scene.createEntity(name, parent)
+    item.tag = name
+    item.layer = entity.layer
+    item.transform.localPosition = new Vector3(x, y, z)
+    return item
+mend
+method Label(parent, value, x, y, size)
+    var item = Element(parent, "Label", x, y, -0.1)
+    var text = item.addComponent<SimpleText>()
+    text.text = value
+    text.pixelSize = size
+    return text
+mend
+method Panel(parent, width, height)
+    var image = Element(parent, "Panel", 0, 0, 0).addComponent<Image>()
+    image.width = width
+    image.height = height
+    image.color = new Color(24, 30, 44)
+mend
+method MakeButton(parent, name, y, callback)
+    var item = Element(parent, name, 0, y, -0.1)
+    var image = item.addComponent<Image>()
+    image.width = 300
+    image.height = 44
+    item.addComponent<Button>().onClick = callback
+    return Label(item, name, 0, 0, 2.2)
+mend
+method Awake
+    sizes[0,0] = 800; sizes[0,1] = 500
+    sizes[1,0] = 1024; sizes[1,1] = 768
+    sizes[2,0] = 1280; sizes[2,1] = 720
+    sizes[3,0] = 1600; sizes[3,1] = 900
+    sizes[4,0] = 1920; sizes[4,1] = 1080
+    menu = scene.findWithTag("MenuCanvas")
+    if menu == null
+        menu = Element(entity, "MenuCanvas", 0, 0, 5)
+        menu.addComponent<Canvas>().camera = entity
+        pauseMenu = Element(menu, "PauseMenu", 0, 0, 0)
+        Panel(pauseMenu, 360, 320)
+        Label(pauseMenu, "PAUSED", 0, 115, 4)
+        MakeButton(pauseMenu, "RESUME", 45, Resume)
+        MakeButton(pauseMenu, "SETTINGS", -15, Settings)
+        MakeButton(pauseMenu, "QUIT", -75, Quit)
+        Label(pauseMenu, "ESC TO RESUME", 0, -135, 1.5)
+        settingsMenu = Element(menu, "SettingsMenu", 0, 0, 0)
+        Panel(settingsMenu, 420, 400)
+        Label(settingsMenu, "SETTINGS", 0, 160, 3.5)
+        Label(settingsMenu, "DISPLAY", 0, 110, 1.8)
+        MakeButton(settingsMenu, "SIZE", 65, CycleSize)
+        MakeButton(settingsMenu, "MODE", 5, ToggleMode)
+        MakeButton(settingsMenu, "APPLY", -55, Apply)
+        MakeButton(settingsMenu, "BACK", -115, Back)
+        Label(settingsMenu, "ESC TO GO BACK", 0, -175, 1.5)
+    end
+    pauseMenu = scene.findWithTag("PauseMenu")
+    settingsMenu = scene.findWithTag("SettingsMenu")
+    sizeLabel = scene.findWithTag("SIZE").getChild(0).getComponent<SimpleText>()
+    modeLabel = scene.findWithTag("MODE").getChild(0).getComponent<SimpleText>()
+    scene.findWithTag("RESUME").getComponent<Button>().onClick = Resume
+    scene.findWithTag("SETTINGS").getComponent<Button>().onClick = Settings
+    scene.findWithTag("QUIT").getComponent<Button>().onClick = Quit
+    scene.findWithTag("SIZE").getComponent<Button>().onClick = CycleSize
+    scene.findWithTag("MODE").getComponent<Button>().onClick = ToggleMode
+    scene.findWithTag("APPLY").getComponent<Button>().onClick = Apply
+    scene.findWithTag("BACK").getComponent<Button>().onClick = Back
+    Show(0)
+mend
+method Show(next)
+    mode = next
+    menu.visible = mode != 0
+    pauseMenu.visible = mode == 1
+    settingsMenu.visible = mode == 2
+    gameplay.setPaused(mode != 0)
+mend
+method Resume
+    Show(0)
+mend
+method Settings
+    pending = new ScreenSettings(gameplay.screen.width, gameplay.screen.height, gameplay.screen.fullscreen)
+    for i = 0 to 4
+        if sizes[i,0] == pending.width && sizes[i,1] == pending.height
+            sizeIndex = i
+        end
+    end
+    RefreshLabels()
+    Show(2)
+mend
+method RefreshLabels
+    sizeLabel.text = "SIZE: " + pending.width + " X " + pending.height
+    if pending.fullscreen
+        modeLabel.text = "MODE: FULLSCREEN"
+    else
+        modeLabel.text = "MODE: WINDOWED"
+    end
+mend
+method CycleSize
+    sizeIndex = (sizeIndex + 1) % 5
+    pending.width = sizes[sizeIndex,0]
+    pending.height = sizes[sizeIndex,1]
+    RefreshLabels()
+mend
+method ToggleMode
+    pending.fullscreen = !pending.fullscreen
+    RefreshLabels()
+mend
+method Apply
+    gameplay.screen = new ScreenSettings(pending.width, pending.height, pending.fullscreen)
+mend
+method Back
+    Show(1)
+mend
+method Quit
+    gameplay.quitRequested = true
+mend
+method Update
+    // Preserve the 800 x 500 menu design at every aspect ratio.
+    if input.renderWidth > 0 && input.renderHeight > 0
+        entity.getComponent<Camera>().orthographicSize = Math.Max(250, 400 * input.renderHeight / input.renderWidth)
+    end
+    if input.focused && input.pressed(Key.Escape)
+        if mode == 0
+            Show(1)
+        elseif mode == 2
+            Show(1)
+        else
+            Resume()
+        end
+    end
+mend

@@ -77,7 +77,7 @@ void Editor::play() {
         if (playGame_->executeScripts()) playScripts_.awake(playGame_->scene());
         refreshPlayView();
     } catch (...) {
-        playGame_.reset(); ui_.cancel(); playControls_.entities.clear(); pauseLabel_ = nullptr;
+        playGame_.reset(); ui_.cancel(); playControls_.entities.clear(); pauseLabel_ = nullptr; statsPanel_ = nullptr; statsText_ = nullptr;
         Application::targetFramerate = framerate; Application::vSync = vsync;
         std::error_code ignored; std::filesystem::current_path(directory, ignored); rebuild_ = true;
         throw;
@@ -85,22 +85,23 @@ void Editor::play() {
 }
 void Editor::stop() {
     if (!playing()) return;
-    ui_.cancel(); playGame_.reset(); playControls_.entities.clear(); pauseLabel_ = nullptr;
+    ui_.cancel(); playGame_.reset(); playControls_.entities.clear(); pauseLabel_ = nullptr; statsPanel_ = nullptr; statsText_ = nullptr;
     playPaused_ = playStep_ = playFocused_ = false;
     Application::targetFramerate = editTargetFramerate_; Application::vSync = editVSync_;
     std::error_code ignored; std::filesystem::current_path(editDirectory_, ignored);
     status_ = "Stopped | Scene edits preserved"; rebuild_ = true; rebuild();
 }
 void Editor::buildPlayControls() {
+    ui_.cancel(); statsPanel_ = nullptr; statsText_ = nullptr;
     Scene editView = std::move(view_); view_ = {};
     auto& camera = view_.entities.emplace_back(); camera.layer = 31;
     auto& view = camera.addComponent<Camera>(); view.layers = layerMask(31); view.clearColor = false;
-    view.depth = std::numeric_limits<float>::max(); view.orthographic = true; view.orthographicSize = 400;
+    view.depth = std::numeric_limits<float>::max(); view.orthographic = true; view.orthographicSize = layoutHeight_ * .5f;
     auto& root = element(camera, 0, 0, 10); root.addComponent<Canvas>().camera = &camera;
-    auto& bar = panel(root, 0, 382, 1280, 36, {22, 27, 36});
-    label(bar, -450, 0, "PLAY MODE", 1.6f);
+    auto& bar = panel(root, 0, layoutHeight_ * .5f - 18, layoutWidth_, 36, {22, 27, 36});
+    label(bar, -layoutWidth_ * .5f + 190, 0, "PLAY MODE", 1.6f);
     button(bar, -130, 0, 110, "Stop F5", [this] { stop(); });
-    auto& pause = button(bar, 0, 0, 110, "Pause", [this] {
+    auto& pause = button(bar, 0, 0, 110, playPaused_ ? "Resume" : "Pause", [this] {
         playPaused_ = !playPaused_; playFocused_ = !playPaused_;
         pauseLabel_->text = playPaused_ ? "Resume" : "Pause";
     });
@@ -108,8 +109,13 @@ void Editor::buildPlayControls() {
     button(bar, 130, 0, 110, "Step", [this] {
         playPaused_ = true; playStep_ = true; playFocused_ = false; pauseLabel_->text = "Resume";
     });
-    label(bar, 424, 0, "ESC RELEASES MOUSE", 1.1f);
-    ui_.refresh(view_); playControls_ = std::move(view_); view_ = std::move(editView);
+    label(bar, layoutWidth_ * .5f - 216, 0, "ESC RELEASES MOUSE", 1.1f);
+    auto& stats = button(bar, layoutWidth_ * .5f - 62, 0, 108, "Stats", [this] {
+        statsVisible_ = !statsVisible_; playControlsDirty_ = true;
+    });
+    stats.getComponent<Button>()->normalColor = statsVisible_ ? Color{68,102,153} : Color{29,34,44};
+    if (statsVisible_) buildStatsPanel(root, layoutWidth_ * .5f - 166, layoutHeight_ * .5f - 198);
+    ui_.refresh(view_); playControls_ = std::move(view_); view_ = std::move(editView); playControlsDirty_ = false;
 }
 void Editor::refreshPlayView() {
     std::uint32_t usedLayers = 0;
@@ -126,14 +132,23 @@ void Editor::updatePlay(float seconds, const Input& input) {
     const bool captured = captureMouse();
     ui_.update(playControls_, input);
     if (!playing()) return;
-    const bool overGame = input.viewport.width > 0 && input.viewport.height > 0 &&
+    // Rebuild after UI callbacks finish, while no pressed control is being traversed.
+    if (playControlsDirty_) buildPlayControls();
+    bool overStats = false;
+    if (statsPanel_ && input.viewport.width > 0 && input.viewport.height > 0) {
+        const float x = (input.mouseX - input.viewport.x) * layoutWidth_ / input.viewport.width - layoutWidth_ * .5f;
+        const float y = layoutHeight_ * .5f - (input.mouseY - input.viewport.y) * layoutHeight_ / input.viewport.height;
+        const auto p = statsPanel_->transform.position(); const auto* rect = statsPanel_->getComponent<Image>();
+        overStats = std::abs(x - p.x) <= rect->width * .5f && std::abs(y - p.y) <= rect->height * .5f;
+    }
+    const bool overGame = !overStats && input.viewport.width > 0 && input.viewport.height > 0 &&
         input.mouseX >= input.viewport.x && input.mouseX < input.viewport.x + input.viewport.width &&
-        input.mouseY >= input.viewport.y + input.viewport.height * 36 / 800 && input.mouseY < input.viewport.y + input.viewport.height;
+        input.mouseY >= input.viewport.y + int(input.viewport.height * 36 / layoutHeight_) && input.mouseY < input.viewport.y + input.viewport.height;
     if (!input.focused) playFocused_ = false;
     const bool beginFocus = input.focused && overGame && input.pressed(MouseButton::Left) && !playFocused_;
     if (beginFocus) playFocused_ = true;
     Input gameInput = input;
-    if (!overGame && !captured) gameInput.releaseAll();
+    if (overStats || (!overGame && !captured)) gameInput.releaseAll();
     else if (!playFocused_ || beginFocus) {
         gameInput.keys = {}; gameInput.mouseDeltaX = gameInput.mouseDeltaY = 0; gameInput.text.clear();
     }

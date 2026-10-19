@@ -59,11 +59,11 @@ std::string shortText(std::string text, std::size_t limit = 28) {
 const std::array<Vector3, 3> axes{{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}};
 const std::array<Color, 3> colors{{{236, 80, 80}, {88, 208, 112}, {88, 148, 246}}};
 float& axis(Vector3& v, int i) { return i == 0 ? v.x : i == 1 ? v.y : v.z; }
-bool project(Vector3 world, const Transform& camera, Vector3& screen) {
+bool project(Vector3 world, const Transform& camera, Vector3& screen, float width, float height) {
     Vector3 v = inverseRotate(world - camera.position(), camera.rotation());
     if (v.z <= .1f) return false;
-    const float halfY = std::tan(pi / 6), halfX = halfY * 1280 / 800;
-    screen = {(v.x / (v.z * halfX) + 1) * 640, (1 - v.y / (v.z * halfY)) * 400, v.z}; return true;
+    const float halfY = std::tan(pi / 6), halfX = halfY * width / height;
+    screen = {(v.x / (v.z * halfX) + 1) * width * .5f, (1 - v.y / (v.z * halfY)) * height * .5f, v.z}; return true;
 }
 }
 
@@ -279,6 +279,7 @@ void Editor::rebuild() {
     for (int i = 0; i < 3; ++i) if (scrolls_[i]) offsets_[i] = scrolls_[i]->getComponent<ScrollRect>()->offset;
     ui_.cancel(); statsPanel_ = nullptr; statsText_ = nullptr;
     view_ = deserializeScene(current_); scrolls_.fill(nullptr); handles_.fill(nullptr);
+    componentGizmos_.clear(); gizmoLines_.clear();
     // Disable scene cameras and interactions in the editor's presentation copy.
     for (auto& e : view_.entities) {
         e.layer = 0;
@@ -294,17 +295,17 @@ void Editor::rebuild() {
     gizmos();
     auto& uiCamera = view_.entities.emplace_back(); uiCamera.layer = 31;
     auto& uc = uiCamera.addComponent<Camera>(); uc.layers = layerMask(31); uc.depth = 2; uc.clearColor = false;
-    uc.orthographic = true; uc.orthographicSize = 400; uc.farPlane = 100;
+    uc.orthographic = true; uc.orthographicSize = layoutHeight_ * .5f; uc.farPlane = 100;
     auto& root = element(uiCamera, 0, 0, 10); root.addComponent<Canvas>().camera = &uiCamera;
-    auto& top = panel(root, 0, 382, 1280, 36, {22, 27, 36});
-    button(top, -594, 0, 76, "File", [this] { menu_ = menu_ == "File" ? "" : "File"; rebuild_ = true; });
-    button(top, -510, 0, 76, "Edit", [this] { menu_ = menu_ == "Edit" ? "" : "Edit"; rebuild_ = true; });
-    button(top, -426, 0, 76, "Help", [this] { menu_ = menu_ == "Help" ? "" : "Help"; rebuild_ = true; });
-    button(top, -280, 0, 110, "Play F5", [this] { play(); });
-    label(top, 360, 0, "ERYENGINE EDITOR", 1.6f);
-    auto& hierarchy = panel(root, -530, 110, 220, 508); label(hierarchy, -12, 235, "Hierarchy");
-    button(hierarchy, 85, 235, 30, "+", [this] { dialog_ = Dialog::AddObject; rebuild_ = true; });
-    auto& list = scroll(hierarchy, 0, -8, 212, 454, float(content_.entities.size() * 30 + 20), 0);
+    auto& top = panel(root, 0, layoutHeight_ * .5f - 18, layoutWidth_, 36, {22, 27, 36});
+    button(top, -layoutWidth_ * .5f + 46, 0, 76, "File", [this] { menu_ = menu_ == "File" ? "" : "File"; rebuild_ = true; });
+    button(top, -layoutWidth_ * .5f + 130, 0, 76, "Edit", [this] { menu_ = menu_ == "Edit" ? "" : "Edit"; rebuild_ = true; });
+    button(top, -layoutWidth_ * .5f + 214, 0, 76, "Help", [this] { menu_ = menu_ == "Help" ? "" : "Help"; rebuild_ = true; });
+    button(top, -layoutWidth_ * .5f + 360, 0, 110, "Play F5", [this] { play(); });
+    label(top, layoutWidth_ * .5f - 280, 0, "ERYENGINE EDITOR", 1.6f);
+    auto& hierarchy = panel(root, -layoutWidth_ * .5f + 110, 110, 220, layoutHeight_ - 292); label(hierarchy, -12, layoutHeight_ * .5f - 165, "Hierarchy");
+    button(hierarchy, 85, layoutHeight_ * .5f - 165, 30, "+", [this] { dialog_ = Dialog::AddObject; rebuild_ = true; });
+    auto& list = scroll(hierarchy, 0, -8, 212, layoutHeight_ - 346, float(content_.entities.size() * 30 + 20), 0);
     std::vector<std::pair<std::size_t, int>> hierarchyRows;
     const auto children = [&](auto&& self, const Entity* parent, int depth) -> void {
         for (std::size_t i = 0; i < content_.entities.size(); ++i) if (content_.entities[i].parent() == parent) {
@@ -314,12 +315,16 @@ void Editor::rebuild() {
     children(children, nullptr, 0);
     for (std::size_t row = 0; row < hierarchyRows.size(); ++row) {
         const auto [i, depth] = hierarchyRows[row];
-        auto& b = button(list, 0, -float(row * 30), 204, std::string(std::min(depth, 4), '>') + std::to_string(i) + ": " + shortText(content_.entities[i].name, 18 - std::min(depth, 4)),
+        auto& b = button(list, 0, -float(row * 30), 204, std::to_string(i) + ": " + shortText(content_.entities[i].name, 20 - std::min(depth, 8)),
             [this, i] { selected_ = i; offsets_[1] = 0; if (scrolls_[1]) scrolls_[1]->getComponent<ScrollRect>()->offset = 0; rebuild_ = true; });
+        auto* textEntity = b.getChild(0); auto* text = textEntity->getComponent<SimpleText>();
+        text->centered = false; text->pixelSize = 1.2f;
+        textEntity->transform.localPosition.x = -94 + std::min(depth, 8) * 12.f;
+        textEntity->transform.localPosition.y = 3;
         b.getComponent<Button>()->normalColor = selected_ == i ? accent : panelColor;
     }
-    auto& inspector = panel(root, 480, 110, 320, 508); label(inspector, 0, 235, "Inspector"); inspect(inspector);
-    auto& tools = panel(root, -50, 344, 740, 36, {29, 34, 44});
+    auto& inspector = panel(root, layoutWidth_ * .5f - 160, 110, 320, layoutHeight_ - 292); label(inspector, 0, layoutHeight_ * .5f - 165, "Inspector"); inspect(inspector);
+    auto& tools = panel(root, -50, layoutHeight_ * .5f - 56, layoutWidth_ - 540, 36, {29, 34, 44});
     for (int i = 0; i < 3; ++i) {
         auto& b = button(tools, -315 + i * 106.f, 0, 100, i == 0 ? "Move W" : i == 1 ? "Rotate E" : "Scale R",
             [this, i] { tool_ = static_cast<Tool>(i); rebuild_ = true; });
@@ -329,19 +334,32 @@ void Editor::rebuild() {
         [this] { space_ = space_ == Space::World ? Space::Local : Space::World; rebuild_ = true; });
     auto& statsButton = button(tools, 100, 0, 88, "Stats", [this] { statsVisible_ = !statsVisible_; rebuild_ = true; });
     statsButton.getComponent<Button>()->normalColor = statsVisible_ ? accent : panelColor;
-    label(tools, 250, 0, "RMB LOOK | F FRAME", 1.f);
-    auto& project = panel(root, 0, -260, 1280, 230); projectPanel(project);
-    auto& status = panel(root, 0, -387, 1280, 26, {22, 27, 36}); label(status, 0, 0, shortText(status_, 130), 1.3f);
-    if (statsVisible_) {
-        statsPanel_ = &panel(root, 154, 172, 304, 300, {22, 27, 36}); statsPanel_->transform.localPosition.z = -2;
-        label(*statsPanel_, 0, 130, "Rendering stats", 1.4f);
-        statsText_ = label(*statsPanel_, -138, 106, "", 1.25f).getComponent<SimpleText>();
-        statsText_->centered = false;
-        refreshStats();
-    }
-    if (!menu_.empty()) {
-        const float x = menu_ == "File" ? -520 : menu_ == "Edit" ? -436 : -352;
-        auto& popup = panel(root, x, 280, 220, menu_ == "File" ? 150 : menu_ == "Edit" ? 116 : 50); popup.transform.localPosition.z = -4;
+    auto& gizmosButton = button(tools, 192, 0, 88, "Gizmos", [this] { menu_ = menu_ == "Gizmos" ? "" : "Gizmos"; rebuild_ = true; });
+    gizmosButton.getComponent<Button>()->normalColor = gizmoOptions_.enabled ? accent : panelColor;
+    label(tools, 298, 0, "RMB LOOK | F FRAME", .8f);
+    auto& project = panel(root, 0, -layoutHeight_ * .5f + 140, layoutWidth_, 230); projectPanel(project);
+    auto& status = panel(root, 0, -layoutHeight_ * .5f + 13, layoutWidth_, 26, {22, 27, 36}); label(status, 0, 0, shortText(status_, 130), 1.3f);
+    if (statsVisible_) buildStatsPanel(root, layoutWidth_ * .5f - 486, layoutHeight_ * .5f - 228);
+    if (menu_ == "Gizmos") {
+        auto& popup = panel(root, 196, layoutHeight_ * .5f - 184, 240, 220); popup.transform.localPosition.z = -4;
+        label(popup, -16, 92, "Gizmo options", 1.4f);
+        button(popup, 100, 92, 26, "X", [this] { menu_.clear(); rebuild_ = true; });
+        const auto toggle = [&](float y, const std::string& title, bool GizmoOptions::* setting) {
+            auto& b = button(popup, 0, y, 220, title + (gizmoOptions_.*setting ? ": On" : ": Off"), [this, setting] {
+                gizmoOptions_.*setting = !(gizmoOptions_.*setting); rebuild_ = true;
+            });
+            b.getComponent<Button>()->normalColor = gizmoOptions_.*setting ? accent : panelColor;
+        };
+        toggle(52, "Enabled", &GizmoOptions::enabled);
+        toggle(18, "Colliders", &GizmoOptions::colliders);
+        toggle(-16, "Cameras", &GizmoOptions::cameras);
+        toggle(-50, "Script gizmos", &GizmoOptions::scripts);
+        button(popup, 0, -84, 220, gizmoOptions_.selectedOnly ? "Shapes: Selected" : "Shapes: All", [this] {
+            gizmoOptions_.selectedOnly = !gizmoOptions_.selectedOnly; rebuild_ = true;
+        });
+    } else if (!menu_.empty()) {
+        const float x = -layoutWidth_ * .5f + (menu_ == "File" ? 120 : menu_ == "Edit" ? 204 : 288);
+        auto& popup = panel(root, x, layoutHeight_ * .5f - 120, 220, menu_ == "File" ? 150 : menu_ == "Edit" ? 116 : 50); popup.transform.localPosition.z = -4;
         const auto item = [&](int row, const std::string& title, std::function<void()> action) {
             button(popup, 0, (menu_ == "File" ? 54.f : menu_ == "Edit" ? 36.f : 0.f) - row * 34.f, 208, title,
                 [this, action] { menu_.clear(); rebuild_ = true; action(); });
@@ -355,7 +373,7 @@ void Editor::rebuild() {
             item(0, "Undo CTRL+Z", [this] { undo(); }); item(1, "Redo CTRL+Y", [this] { redo(); }); item(2, "Save CTRL+S", [this] { save(); });
         } else item(0, "About EryEngine", [this] { dialog_ = Dialog::About; rebuild_ = true; });
     }
-    dialog(root); ui_.refresh(view_);
+    dialog(root); refreshComponentGizmos(); ui_.refresh(view_);
     if (focusPosition) for (auto& e : view_.entities) if (auto* field = e.getComponent<InputField>(); field && e.layer == 31) {
         if (length(e.transform.position() - *focusPosition) < .001f) { field->text = focusText; ui_.focus(e); break; }
     }
@@ -363,9 +381,9 @@ void Editor::rebuild() {
 }
 
 void Editor::projectPanel(Entity& root) {
-    label(root, -548, 96, "Project");
+    label(root, -layoutWidth_ * .5f + 92, 96, "Project");
     label(root, 65, 96, project_.empty() ? "Create or open a project from File" : shortText(fs::relative(folder_, project_).generic_string(), 90), 1.3f);
-    button(root, 578, 96, 94, "Refresh", [this] { rebuild_ = true; });
+    button(root, layoutWidth_ * .5f - 62, 96, 94, "Refresh", [this] { rebuild_ = true; });
     if (project_.empty()) return;
     const auto& browserRoot = assets_;
     std::vector<fs::directory_entry> entries;
@@ -374,13 +392,13 @@ void Editor::projectPanel(Entity& root) {
         if (a.is_directory() != b.is_directory()) return a.is_directory();
         return a.path() < b.path();
     });
-    auto& list = scroll(root, 0, -10, 1252, 170, float(((entries.size() + 3) / 4 + 1) * 32), 2);
-    if (folder_ != browserRoot) button(list, -465, 0, 298, ".. Parent folder", [this] { folder_ = folder_.parent_path(); offsets_[2] = 0; scrolls_[2]->getComponent<ScrollRect>()->offset = 0; rebuild_ = true; });
+    auto& list = scroll(root, 0, -10, layoutWidth_ - 28, 170, float(((entries.size() + 3) / 4 + 1) * 32), 2);
+    if (folder_ != browserRoot) button(list, -layoutWidth_ * .5f + 175, 0, 298, ".. Parent folder", [this] { folder_ = folder_.parent_path(); offsets_[2] = 0; scrolls_[2]->getComponent<ScrollRect>()->offset = 0; rebuild_ = true; });
     for (std::size_t i = 0; i < entries.size(); ++i) {
         const auto path = entries[i].path(); const bool directory = entries[i].is_directory();
         const bool cpp = !directory && isCppScript(path);
         const auto display = path.parent_path() == folder_ ? path.filename().string() : fs::relative(path, project_).generic_string();
-        button(list, -465 + float(i % 4) * 310, -float(i / 4 + 1) * 32, 298,
+        button(list, -layoutWidth_ * .5f + 175 + float(i % 4) * (layoutWidth_ - 40) / 4, -float(i / 4 + 1) * 32, 298,
             shortText((directory ? "[DIR] " : cpp ? "[C++] " : "") + display, 34), [this, path, directory, cpp] {
                 if (clickedAsset_ == path && time_ - lastClick_ < .45f) {
                     if (directory) { folder_ = path; offsets_[2] = 0; scrolls_[2]->getComponent<ScrollRect>()->offset = 0; rebuild_ = true; }
@@ -396,6 +414,12 @@ void Editor::projectPanel(Entity& root) {
                             dialog_ = Dialog::AddComponent; status_ = "Choose a compiled C++ behaviour";
                         } else status_ = types.empty() ? "C++: " + path.filename().string() + " | Rebuild after adding/registering behaviours" :
                             "Select an object, then double-click this C++ script to attach it";
+                    }
+                    else if (path.extension() == ".ery") {
+                        if (selected_) {
+                            change([&](Scene& scene) { scene.entities.at(*selected_).addComponent<EryScript>().source = fs::relative(path, project_).generic_string(); });
+                            status_ = "Attached EryScript: " + path.filename().string();
+                        } else status_ = "Select an object, then double-click this EryScript to attach it";
                     }
                     else if (path.extension() == ".json") request([this, path] { openScene(path); });
                     else status_ = "Asset: " + path.filename().string();
@@ -481,12 +505,12 @@ void Editor::gizmos() {
 
 void Editor::viewportInput(float seconds, const Input& input) {
     if (input.viewport.width <= 0 || input.viewport.height <= 0) { looking_ = false; return; }
-    Vector3 mouse{float(input.mouseX - input.viewport.x) * 1280 / input.viewport.width,
-                 float(input.mouseY - input.viewport.y) * 800 / input.viewport.height, 0};
-    bool over = mouse.x > 220 && mouse.x < 960 && mouse.y > 74 && mouse.y < 544;
+    Vector3 mouse{float(input.mouseX - input.viewport.x) * layoutWidth_ / input.viewport.width,
+                 float(input.mouseY - input.viewport.y) * layoutHeight_ / input.viewport.height, 0};
+    bool over = mouse.x > 220 && mouse.x < layoutWidth_ - 320 && mouse.y > 74 && mouse.y < layoutHeight_ - 256;
     if (statsPanel_) {
         const auto p = statsPanel_->transform.position(); const auto* rect = statsPanel_->getComponent<Image>();
-        if (std::abs(mouse.x - (640 + p.x)) <= rect->width * .5f && std::abs(mouse.y - (400 - p.y)) <= rect->height * .5f) over = false;
+        if (std::abs(mouse.x - (layoutWidth_ * .5f + p.x)) <= rect->width * .5f && std::abs(mouse.y - (layoutHeight_ * .5f - p.y)) <= rect->height * .5f) over = false;
     }
     if (dragging_ >= 0) {
         looking_ = false;
@@ -540,8 +564,8 @@ void Editor::viewportInput(float seconds, const Input& input) {
     if (over && input.mouseWheel != 0) camera_.localPosition = camera_.localPosition + camera_.forward() * input.mouseWheel;
     refreshViewport();
     if (!over || !input.pressed(MouseButton::Left)) return;
-    Vector3 direction = rotate(normalized(Vector3{(mouse.x / 640 - 1) * std::tan(pi / 6) * 1280 / 800,
-        (1 - mouse.y / 400) * std::tan(pi / 6), 1}), camera_.rotation());
+    Vector3 direction = rotate(normalized(Vector3{(mouse.x * 2 / layoutWidth_ - 1) * std::tan(pi / 6) * layoutWidth_ / layoutHeight_,
+        (1 - mouse.y * 2 / layoutHeight_) * std::tan(pi / 6), 1}), camera_.rotation());
     const Vector3 origin = camera_.position();
     float closest = std::numeric_limits<float>::infinity(); int picked = -1;
     for (int i = 0; i < 3; ++i) if (handles_[i]) {
@@ -562,8 +586,8 @@ void Editor::viewportInput(float seconds, const Input& input) {
         Vector3 a, b;
         if (tool_ == Tool::Rotate) {
             Vector3 hit = origin + direction * closest;
-            project(hit, camera_, a); project(hit + normalized(cross(worldAxis, hit - t.position())) * size, camera_, b);
-        } else { project(t.position(), camera_, a); project(t.position() + worldAxis * size, camera_, b); }
+            project(hit, camera_, a, layoutWidth_, layoutHeight_); project(hit + normalized(cross(worldAxis, hit - t.position())) * size, camera_, b, layoutWidth_, layoutHeight_);
+        } else { project(t.position(), camera_, a, layoutWidth_, layoutHeight_); project(t.position() + worldAxis * size, camera_, b, layoutWidth_, layoutHeight_); }
         Vector3 screenAxis = b - a; screenAxis.z = 0;
         float screenLength = length(screenAxis);
         dragScreenAxis_ = screenLength < 5 ? Vector3{0, -1, 0} : normalized(screenAxis);
@@ -576,6 +600,14 @@ void Editor::viewportInput(float seconds, const Input& input) {
         }
         selected_ = selection; offsets_[1] = 0; if (scrolls_[1]) scrolls_[1]->getComponent<ScrollRect>()->offset = 0; rebuild_ = true;
     }
+}
+
+void Editor::buildStatsPanel(Entity& root, float x, float y) {
+    statsPanel_ = &panel(root, x, y, 304, 300, {22, 27, 36}); statsPanel_->transform.localPosition.z = -2;
+    label(*statsPanel_, 0, 130, "Rendering stats", 1.4f);
+    statsText_ = label(*statsPanel_, -138, 106, "", 1.25f).getComponent<SimpleText>();
+    statsText_->centered = false;
+    refreshStats();
 }
 
 void Editor::refreshStats() {
@@ -612,6 +644,7 @@ void Editor::frameRendered(const graphics::FrameStats& frame) {
 
 void Editor::update(float seconds, const Input& input) {
     time_ += seconds;
+    guard([&] { resizeLayout(input); });
     if (playing()) { guard([&] { updatePlay(seconds, input); }); return; }
     guard([&] {
         const bool wasEditing = ui_.editingText();
@@ -621,6 +654,7 @@ void Editor::update(float seconds, const Input& input) {
         // Retain pressed controls until release when committing a field changed the scene.
         if (rebuild_ && (!input.held(MouseButton::Left) || dragging_ >= 0)) rebuild();
         viewportInput(seconds, input);
+        refreshComponentGizmos();
         if (input.focused && !ui_.editingText() && dialog_ == Dialog::None && dragging_ < 0 && input.held(Key::Control)) {
             if (input.pressed(Key::S)) save();
             if (input.pressed(Key::Z)) { if (input.held(Key::Shift)) redo(); else undo(); }

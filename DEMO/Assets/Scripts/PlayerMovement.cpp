@@ -1,6 +1,10 @@
 #include "PlayerMovement.hpp"
 using namespace tiny3d;
 
+void PlayerMovement::OnGizmosSelected() {
+    Gizmos::color = {90,160,255};
+    Gizmos::line(transform().position(), transform().position() + transform().forward() * 2);
+}
 void PlayerMovement::Awake() {
     for (std::size_t i = 0; i < gameObject().childCount(); ++i) {
         auto* child = gameObject().getChild(i);

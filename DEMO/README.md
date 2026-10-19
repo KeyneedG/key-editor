@@ -14,6 +14,9 @@ Choose **Debug | x64** or **Release | x64**, then press **Ctrl+Shift+B** to buil
 and start the demo. Use `editor` mode to inspect and edit its initial scene.
 Press **Play F5** in the editor to test the current scene, **Pause** or **Step**
 to inspect simulation, and **Stop F5** to return to the unchanged editing scene.
+The play toolbar's **Stats** button shows FPS, frame timing, draw counts, and resolution,
+including while paused. The scene toolbar's **Gizmos** menu controls collider, camera,
+and C++ script outlines, with selected-only or all-object shapes.
 Escape releases the editor play cursor; click the game to capture it again.
 The solution builds through GCC with C++26 reflection enabled. Use GDB for source
 debugging; setup and commands are in [Engine/README.md](../Engine/README.md).
@@ -40,11 +43,15 @@ main menu, or returns from Settings to the main menu.
 In Settings, click **Size** to cycle through **800x500**, **1024x768**, **1280x720**,
 **1600x900**, and **1920x1080**. Click **Mode** to toggle windowed or borderless
 fullscreen, then **Apply**. **Back** returns to the pause menu. Fullscreen fills
-the current monitor and letterboxes the selected render size when necessary.
+the current monitor and renders at its size. Manual window resizing updates the
+render target and keeps the menu fitted to the available area.
 Changes last for the current run.
 
 The world camera renders layer 0; the orthographic UI camera renders layer 1 over
-it. Menu entities are children of a world-space Canvas in front of the UI camera.
+it. `Assets/Scripts/MenuUI.ery` is an EryScript component on `UICamera`. It creates the
+Canvas, menu panels, labels, and buttons at runtime and owns their callbacks and menu
+navigation. The saved scene contains the UI camera and script without menu objects.
+Restarting the script reuses its generated UI and reconnects callbacks.
 Images are solid-color planes, and the built-in text is made from small planes,
 so the demo needs no image or font assets.
 
@@ -67,7 +74,8 @@ subfolder scripts are shown only when browsing that folder. Scripts run in game 
 and editor play; rebuild after changing C++.
 
 `PlayerMovement.cpp` owns WASD movement, mouse look, collision correction, and player
-reset. `CollectorController.cpp` manages collectible state and binds the saved menu
-buttons at runtime. Both are registered native components attached in the scene JSON.
+reset, and draws a forward-direction gizmo when selected. `CollectorController.cpp`
+manages collectible state and exposes pause, quit, and screen settings to `MenuUI.ery`.
+Both are registered native components attached in the scene JSON.
 `game.cpp` only loads the startup scene and hosts UI/physics and window settings;
 scene objects, cameras, geometry, and menus are authored in Assets.

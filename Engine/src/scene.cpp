@@ -92,6 +92,7 @@ std::string serializeScene(const Scene& scene) {
                 data.at("fields").object();
             } else if (const auto* v = dynamic_cast<const EryScript*>(c)) {
                 data["type"] = "EryScript"; data["code"] = v->code;
+                if (!v->source.empty()) data["source"] = v->source;
                 data["runOnAwake"] = v->runOnAwake; data["runInUpdate"] = v->runInUpdate;
             } else if (const auto* v = dynamic_cast<const Canvas*>(c)) {
                 data["type"] = "Canvas"; data["camera"] = reference(v->camera);
@@ -178,7 +179,9 @@ Scene deserializeScene(std::string_view source) {
             } else if (type == "MonoBehaviour") {
                 added = &e.addComponent(restoreBehaviour(c.at("script").string(), c.at("fields")));
             } else if (type == "EryScript") {
-                added = &e.addComponent<EryScript>(c.at("code").string(), c.at("runOnAwake").boolean(), c.at("runInUpdate").boolean());
+                auto& script = e.addComponent<EryScript>(c.at("code").string(), c.at("runOnAwake").boolean(), c.at("runInUpdate").boolean());
+                if (c.has("source")) script.source = c.at("source").string();
+                added = &script;
             } else if (type == "Canvas") { auto& v = e.addComponent<Canvas>(); added = &v; v.camera = reference(c.at("camera"));
             } else if (type == "Image") {
                 auto& v = e.addComponent<Image>(); added = &v; v.color = color(c.at("color"));

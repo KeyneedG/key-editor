@@ -3,11 +3,13 @@
 #include "tiny3d/ui.hpp"
 #include "eryscript/reflection.hpp"
 #include <iostream>
+#include <fstream>
 
 namespace tiny3d {
 namespace detail {
 struct ScriptFrame {
     Entity* entity = nullptr;
+    Scene* scene = nullptr;
     Input input;
     float deltaTime = 0;
     double time = 0;
@@ -50,10 +52,16 @@ void Scripts::run(Scene& scene, Entity& entity, EryScript& script, float seconds
     if (!script.enabled) return;
     script.reflection();
     auto& state = *script.bindings_;
-    state.scene = &scene; state.frame = {&entity, input, seconds, time_};
+    state.scene = &scene; state.frame = {&entity, &scene, input, seconds, time_};
     try {
-        if (!script.initialized_ || script.loadedSource_ != script.code) {
-            script.initialized_ = true; script.loadedSource_ = script.code; script.error_.clear();
+        if (!script.initialized_ || script.loadedSource_ != script.code || script.loadedPath_ != script.source) {
+            script.initialized_ = true; script.loadedSource_ = script.code; script.loadedPath_ = script.source; script.error_.clear();
+            if (!script.source.empty()) {
+                std::ifstream file(script.source);
+                if (!file) throw std::runtime_error("Cannot read EryScript: " + script.source);
+                script.code.assign(std::istreambuf_iterator<char>(file), {});
+                script.loadedSource_ = script.code;
+            }
             script.runtime_.load(script.code, state.reflection.object(&std::as_const(state.frame)));
             if (script.runOnAwake && script.runtime_.hasMethod("Awake")) script.runtime_.call("Awake");
         }

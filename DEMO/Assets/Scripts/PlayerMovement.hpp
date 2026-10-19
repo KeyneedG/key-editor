@@ -7,6 +7,7 @@ public:
     float speed = 4, mouseSensitivity = .0025f;
     bool captureMouse() const override { return true; }
     void Awake() override;
+    void OnGizmosSelected() override;
     void Update(float seconds, const tiny3d::Input& input) override;
     tiny3d::json::Value saveFields() const override;
     void loadFields(const tiny3d::json::Value& fields) override;

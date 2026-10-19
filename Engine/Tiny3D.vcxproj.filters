@@ -1,6 +1,12 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
+    <ClCompile Include="tests\gizmo_checks.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="tests\window_checks.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClInclude Include="include\tiny3d\gizmos.hpp"><Filter>Engine</Filter></ClInclude>
+    <ClCompile Include="src\gizmos.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="Editor\src\gizmos.cpp"><Filter>Editor</Filter></ClCompile>
+    <None Include="..\DEMO\Assets\Scripts\MenuUI.ery"><Filter>Demo</Filter></None>
     <ClCompile Include="Editor\src\play.cpp"><Filter>Editor</Filter></ClCompile>
     <ClCompile Include="tests\demo_checks.cpp"><Filter>Demo</Filter></ClCompile>
     <ClCompile Include="..\DEMO\Assets\Scripts\PlayerMovement.cpp"><Filter>Demo</Filter></ClCompile>

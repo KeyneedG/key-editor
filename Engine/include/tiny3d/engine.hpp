@@ -234,6 +234,15 @@ T& Component::addComponent(Args&&... args) {
 struct Scene {
     // Appending entities does not invalidate parent pointers or entity references.
     std::deque<Entity> entities;
+    // Stable scene-owned objects, also available to EryScript through its scene root.
+    Entity& createEntity(std::string name = "Object", Entity* parent = nullptr) {
+        auto& entity = entities.emplace_back(); entity.name = std::move(name);
+        entity.setParent(parent, false); return entity;
+    }
+    Entity* findWithTag(const std::string& tag) {
+        for (auto& entity : entities) if (entity.tag == tag) return &entity;
+        return nullptr;
+    }
 };
 
 class Renderer {
@@ -356,7 +365,7 @@ private:
 };
 
 struct ScreenSettings {
-    int width = 0, height = 0; // Zero keeps the initial/current rendering size.
+    int width = 0, height = 0; // Requested windowed client size; zero keeps the current size.
     bool fullscreen = false; // Borderless fullscreen on the current monitor.
     bool operator==(const ScreenSettings& other) const {
         return width == other.width && height == other.height && fullscreen == other.fullscreen;

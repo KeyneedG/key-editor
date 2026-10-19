@@ -63,7 +63,9 @@ void applyScreenSettings(HWND window, RenderBackend& renderer, ScreenState& stat
         bounds.bottom - bounds.top, SWP_NOZORDER | SWP_FRAMECHANGED)) {
         throw std::runtime_error("Cannot apply screen settings");
     }
-    if (renderer.width() != width || renderer.height() != height) renderer.resize(width, height);
+    RECT actual{}; GetClientRect(window, &actual);
+    if (actual.right > 0 && actual.bottom > 0 && (renderer.width() != actual.right || renderer.height() != actual.bottom))
+        renderer.resize(actual.right, actual.bottom);
     state.requested = settings;
     state.fullscreen = settings.fullscreen;
     state.initialized = true;
@@ -232,7 +234,10 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
     case WM_ENTERMENULOOP:
         captureMouse(window, *state, false);
         return 0;
-    case WM_MOVE: case WM_SIZE:
+    case WM_SIZE:
+        InvalidateRect(window, nullptr, FALSE);
+        [[fallthrough]];
+    case WM_MOVE:
         if (state->mouseCaptured) captureMouse(window, *state, true);
         return 0;
     case WM_CLOSE:
@@ -344,6 +349,8 @@ int run(Game& game, int width, int height, unsigned frameLimit, graphics::Backen
         if (!state.running) break;
         RECT client{};
         GetClientRect(window.value, &client);
+        if (client.right > 0 && client.bottom > 0 &&
+            (renderer.width() != client.right || renderer.height() != client.bottom)) renderer.resize(client.right, client.bottom);
         input.renderWidth = renderer.width();
         input.renderHeight = renderer.height();
         input.viewport = fitViewport(client.right, client.bottom, renderer.width(), renderer.height());

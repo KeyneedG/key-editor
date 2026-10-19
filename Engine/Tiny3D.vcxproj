@@ -44,6 +44,12 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="tests\gizmo_checks.cpp" />
+    <ClCompile Include="tests\window_checks.cpp" />
+    <ClInclude Include="include\tiny3d\gizmos.hpp" />
+    <ClCompile Include="src\gizmos.cpp" />
+    <ClCompile Include="Editor\src\gizmos.cpp" />
+    <None Include="..\DEMO\Assets\Scripts\MenuUI.ery" Condition="Exists('$(ProjectDir)..\DEMO\Assets\Scripts\MenuUI.ery')" />
     <ClInclude Include="include\tiny3d\engine.hpp" />
     <ClInclude Include="include\tiny3d\behaviour.hpp" />
     <ClInclude Include="..\DEMO\Assets\Scripts\PlayerMovement.hpp" Condition="Exists('$(ProjectDir)..\DEMO\Assets\Scripts\PlayerMovement.hpp')" />

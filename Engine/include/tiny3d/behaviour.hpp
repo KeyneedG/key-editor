@@ -1,16 +1,19 @@
 #pragma once
 #include "tiny3d/engine.hpp"
+#include "tiny3d/gizmos.hpp"
 #include "tiny3d/json.hpp"
 #include <filesystem>
 #include <string_view>
 #include <typeindex>
 
 namespace tiny3d {
-// Native script component. Callbacks run only in game mode, while enabled.
+// Native script component. Lifecycle callbacks run in game mode; gizmos run in the editor.
 class MonoBehaviour : public Component {
 public:
     // Enabled behaviours may request mouse capture from the default Game loop.
     virtual bool captureMouse() const { return false; }
+    virtual void OnGizmos() {}
+    virtual void OnGizmosSelected() {}
     virtual void Awake() {}
     virtual void Start() {}
     virtual void Update(float seconds, const Input& input) { (void)seconds; (void)input; }
@@ -26,6 +29,7 @@ public:
 
 private:
     friend class Scripts;
+    friend class Gizmos;
     Scene* scene_ = nullptr;
     bool awakened_ = false, started_ = false;
     std::string error_;

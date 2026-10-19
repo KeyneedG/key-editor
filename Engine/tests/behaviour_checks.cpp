@@ -214,10 +214,41 @@ void playChecks(const fs::path& scratch) {
     input = pointer(); input.set(Key::F5, true); editor.update(.016f, input); check(!editor.playing(), "F5 did not stop play");
 }
 
+void playStatsChecks(const fs::path& scratch) {
+    Scene scene; auto& object = scene.createEntity(); object.addComponent<Probe>(); object.addComponent<MouseCapture>();
+    scene.createEntity().addComponent<Camera>(); editor::Editor editor(std::move(scene), scratch / "StatsEngine");
+    const auto hasText = [&](const std::string& value) {
+        for (auto& e : editor.scene().entities) if (auto* text = e.getComponent<SimpleText>(); text && text->text.find(value) != std::string::npos) return true;
+        return false;
+    };
+    editor.play(); check(findButton(editor.scene(), "Stats"), "Play toolbar has no Stats toggle");
+    click(editor, "Stats"); check(hasText("Rendering stats"), "Play Stats toggle did not show the overlay");
+    auto input = pointer(); input.set(Key::Escape,true); editor.update(.016f,input);
+    input.beginFrame(); input.set(Key::Escape,false); input.mouseX = 1200; input.mouseY = 100;
+    input.set(Key::A,true); input.set(MouseButton::Left,true); editor.update(.016f,input);
+    check(!editor.captureMouse() && editor.playScene()->entities.front().tag != "Input received", "Stats overlay clicks/keys reached the game or recaptured its mouse");
+    input.beginFrame(); input.set(Key::A,false); input.set(MouseButton::Left,false); editor.update(.016f,input);
+    click(editor, "Pause"); const int updates = editor.playScene()->entities.front().getComponent<Probe>()->updates;
+    graphics::FrameStats frame; frame.renderer = "Software"; frame.width = 1280; frame.height = 800;
+    frame.frameSeconds = .02f; frame.updateSeconds = .001f; frame.rendering.batches = 17;
+    editor.frameRendered(frame); editor.update(.1f,pointer());
+    check(hasText("FPS: 50.0") && hasText("Batches / draws: 17") && hasText("Resolution: 1280 x 800"), "Paused stats did not refresh rendered-frame metrics");
+    input = pointer(); input.renderWidth = 1600; input.renderHeight = 900; input.viewport = {0,0,1600,900}; editor.update(0,input);
+    frame.width = 1600; frame.height = 900; for (int n = 0; n < 13; ++n) editor.frameRendered(frame); editor.update(0,input);
+    check(editor.paused() && hasText("Rendering stats") && hasText("Resolution: 1600 x 900") &&
+        editor.playScene()->entities.front().getComponent<Probe>()->updates == updates, "Resizing Stats unpaused play, advanced simulation, or lost the overlay");
+    // Return to the standard input layout before picking another toolbar button.
+    editor.update(0,pointer()); click(editor,"Stats"); check(!hasText("Rendering stats"), "Stats overlay did not hide");
+    editor.frameRendered(frame); editor.update(0,pointer());
+    click(editor,"Stats"); editor.stop(); editor.frameRendered(frame); editor.update(0,pointer());
+    check(!editor.playing() && hasText("Rendering stats") && !editor.dirty(), "Stopping play lost the stats preference or changed the scene");
+    click(editor,"Stats"); editor.play(); check(!hasText("Rendering stats"), "Hidden stats preference was lost on play"); editor.stop();
+}
+
 int main() {
     try {
         const auto scratch = fs::current_path() / ("behaviour-check-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-        editorChecks(scratch); playChecks(scratch); lifecycleChecks(); mutationChecks(); persistenceChecks();
+        editorChecks(scratch); playChecks(scratch); playStatsChecks(scratch); lifecycleChecks(); mutationChecks(); persistenceChecks();
         std::cout << "Native behaviour lifecycle, ownership, mutation, persistence, Assets, and Inspector checks passed.\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }

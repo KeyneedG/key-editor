@@ -23,7 +23,7 @@ J read(const fs::path& path) {
 }
 
 void Editor::inspect(Entity& root) {
-    if (!selected_ || *selected_ >= content_.entities.size()) { label(root, 0, 185, "Select an object"); return; }
+    if (!selected_ || *selected_ >= content_.entities.size()) { label(root, 0, layoutHeight_ * .5f - 215, "Select an object"); return; }
     const auto selected = *selected_;
     const auto data = json::parse(current_);
     const auto object = data.at("entities").at(selected);
@@ -46,7 +46,7 @@ void Editor::inspect(Entity& root) {
         const auto& properties = native ? c.at("fields").object() : c.object();
         for (const auto& [key, v] : properties) if (native || (key != "type" && key != "enabled")) contentHeight += key == "code" ? 150 : 34;
     }
-    auto& list = scroll(root, 0, -10, 308, 450, contentHeight, 1);
+    auto& list = scroll(root, 0, -10, 308, layoutHeight_ - 350, contentHeight, 1);
     float y = 0;
     const auto textField = [&](std::string key, std::string value) {
         label(list, -105, y, key, 1.2f);
@@ -97,7 +97,7 @@ void Editor::inspect(Entity& root) {
         }
         const auto& properties = native ? c.at("fields").object() : c.object();
         for (const auto& [key, value] : properties) {
-            if (!native && (key == "type" || key == "enabled")) continue;
+            if (!native && (key == "type" || key == "enabled" || (key == "code" && c.has("source") && !c.at("source").string().empty()))) continue;
             const auto set = [editComponent, i, key, c, native](J v) {
                 if (native) { auto fields = c.at("fields"); fields[key] = std::move(v); editComponent(i, "fields", std::move(fields)); }
                 else editComponent(i, key, std::move(v));
@@ -149,7 +149,7 @@ void Editor::inspect(Entity& root) {
 void Editor::dialog(Entity& root) {
     if (dialog_ == Dialog::None) return;
     // An interactable backdrop blocks picking through the modal, using the same UI.
-    auto& backdrop = panel(root, 0, 0, 1280, 800, {17, 22, 30}); backdrop.transform.localPosition.z = -5;
+    auto& backdrop = panel(root, 0, 0, layoutWidth_, layoutHeight_, {17, 22, 30}); backdrop.transform.localPosition.z = -5;
     auto& blocker = backdrop.addComponent<Button>(); blocker.normalColor = blocker.hoverColor = blocker.pressedColor = {17, 22, 30};
     auto& box = panel(backdrop, 0, 0, 570, dialog_ == Dialog::AddComponent ? 560 : 380, {35, 43, 57});
     const auto close = [this] { dialog_ = Dialog::None; pending_ = {}; rebuild_ = true; };

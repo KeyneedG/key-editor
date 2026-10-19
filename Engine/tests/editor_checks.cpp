@@ -262,7 +262,7 @@ void transformSpaceChecks(const fs::path& scratch) {
     child.transform.localPosition = {.5f, .6f, 0}; child.transform.localRotation = Quaternion::fromEuler({.15f, .25f, -.2f});
     child.addComponent<MeshRenderer>(std::make_shared<Mesh>(cube()));
     editor::Editor editor(std::move(scene), scratch);
-    clickButton(editor, ">1: Child"); auto focus = pointer(0, 0); focus.set(Key::F, true); editor.update(.016f, focus);
+    clickButton(editor, "1: Child"); auto focus = pointer(0, 0); focus.set(Key::F, true); editor.update(.016f, focus);
     const auto initial = serializeScene(editor.content());
     const auto firstHandle = [&]() -> Entity& {
         for (auto& e : editor.scene().entities) if (e.layer == 30) return e;

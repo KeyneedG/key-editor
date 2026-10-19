@@ -151,9 +151,9 @@ physics, and game updates while editing.
   resumes simulation; **Step** advances one 1/60-second frame while paused. Escape
   releases mouse capture; click the game to capture it again. Focus loss also releases
   capture. Runtime quit requests stop play instead of closing the editor. The preview
-  keeps the editor's resolution and window mode.
+  uses the editor window size and window mode.
 - **Hierarchy:** select objects or use **+** to create an empty object, cube,
-  plane, or camera. Children appear beneath their parents.
+  plane, or camera. Names are left-aligned and children are indented beneath their parents.
 - **Inspector:** edit names, tags, layers, visibility, local transforms, parent
   index (-1 means no parent), and built-in component properties. Rotation fields
   use degrees; vectors are X/Y/Z and colors are R/G/B. Add or remove components.
@@ -161,7 +161,7 @@ physics, and game updates while editing.
 - **Project:** starts inside Assets, creating the folder when opening a project
   without it. C++ source/header files have a `[C++]` prefix and appear only in
   their own folder; double-click a subfolder to view its scripts.
-  Select an object and double-click a compiled behaviour script to attach it.
+  Select an object and double-click a compiled behaviour script or `.ery` file to attach it.
   Double-click folders to browse and scene JSON files to load them;
   Refresh reloads the directory listing. Wheel-scroll each panel independently.
 - **Scene view:** click a mesh to select it. Use W/E/R or the toolbar to move,
@@ -175,13 +175,22 @@ physics, and game updates while editing.
   selected object's rotation, including its parents. Inspector values remain
   local. World scaling projects the stretch onto the existing local scale axes;
   the engine's position/rotation/scale transforms do not store shear.
-- **Stats:** show or hide frame FPS/ms, CPU update/render time, presentation time,
+- **Stats:** available in both the scene toolbar and play toolbar, including while
+  paused. Show or hide frame FPS/ms, CPU update/render time, presentation time,
   batches/draws, instances/glyphs, instanced batches/saved draws, submitted
   triangles/vertices, cameras, GPU mesh uploads, and
   resolution. Values refresh four times per second and include editor UI/gizmos.
   Batches count actual draw calls; saved draws compare them with one draw per
   original mesh submission. Presentation
   time includes vsync waiting; CPU render time is submission time, not GPU time.
+- **Gizmos:** open the scene toolbar menu to enable/disable component gizmos, toggle
+  collider, camera, and C++ script drawing separately, and switch built-in shapes
+  between selected objects and all objects. Preferences do not dirty the scene or
+  enter undo history. Transform handles remain available for the active tool.
+
+The editor adapts to the client aspect ratio when resizing or maximizing. Side panels
+stay at the edges, the scene area expands, and controls scale to fit smaller windows
+while keeping their text proportions and picking coordinates.
 
 Input fields commit on Enter or focus loss and restore their previous value on
 Escape. Clicking a field selects its text; Ctrl+A selects all. Arrow keys,
@@ -417,10 +426,45 @@ and undo/redo. With no overrides, scripts save their type and enabled flag and r
 constructor defaults. Missing compiled scripts keep their identity and saved fields,
 show a rebuild message in the Inspector, and report an error if run.
 
+## Editor gizmos
+
+`tiny3d/gizmos.hpp` provides immediate world-space wire drawing. A registered C++
+`MonoBehaviour` can override parameterless `OnGizmos()` for every editor frame and
+`OnGizmosSelected()` for its selected owner. These callbacks run while editing, before
+`Awake`, with access to `scene()`, `gameObject()`, and `transform()`. Use saved configuration
+rather than runtime-only caches, and keep callbacks limited to drawing. Disabled
+behaviours are skipped. Callbacks do not run during play or standalone games.
+
+```cpp
+void OnGizmos() override {
+    tiny3d::Gizmos::color = {90, 160, 255};
+    tiny3d::Gizmos::line(transform().position(), transform().position() + transform().forward() * 2);
+}
+void OnGizmosSelected() override {
+    tiny3d::Gizmos::color = {255, 200, 90};
+    tiny3d::Gizmos::wireSphere(transform().position(), 3);
+}
+```
+
+Other drawing methods are `wireCube(center, size, rotation)`,
+`wireCapsule(center, radius, height, rotation)`, and `frustum(transform, camera, aspect)`.
+Rotations default to identity. Color resets between behaviours. Calls outside drawing
+callbacks do nothing; invalid coordinates and callback exceptions are isolated and
+reported in the editor. The editor caches unchanged geometry and renders it as an
+unlit overlay, excluded from selection picking, saved scenes, and runtime rendering.
+Selected box, sphere, and capsule colliders get outlines matching their physics bounds;
+selected cameras show their perspective or orthographic near/far frustum. The **Gizmos**
+menu can show these shapes for all objects or hide individual categories. Editor hosts
+can pass `GizmoOptions` as the fifth argument of `Gizmos::collect` to apply the same
+filters; `selectedOnly` controls built-in shapes, while script callbacks retain their
+`OnGizmos` / `OnGizmosSelected` semantics.
+
 ## EryScript components
 
 Include tiny3d/eryscript.hpp and add an EryScript component. Its public code
-string contains the source; runOnAwake and runInUpdate both default to true.
+string contains inline source; alternatively set `source` to a project-relative `.ery`
+file. File references are saved with the scene and read when entering play or restarting
+the script. `runOnAwake` and `runInUpdate` both default to true.
 The engine initializes scripts before the first paint, calls parameterless
 Awake once, then calls parameterless Update after Game::update each frame.
 Missing methods are skipped. Newly added or reenabled components initialize on
@@ -443,9 +487,13 @@ engine binding tables. Scripts use the C++ names and signatures:
 `Quaternion.fromEuler(new Vector3(0, angle, 0))`, `input.held(Key.W)` and
 `layerMask(1)`. Start scripts with `using tiny3d` to use namespace members.
 
-The script root (`this`) provides `entity`, read-only `input`, `deltaTime` and
+The script root (`this`) provides `entity`, `scene`, read-only `input`, `deltaTime` and
 `time`. Nested object fields are live: `entity.transform.localPosition.y = 2`
-updates the entity directly. World transforms use the C++ getter/setter methods.
+updates the entity directly. `scene.createEntity(name, parent)` creates stable scene-owned
+objects; `scene.findWithTag(tag)` finds an object or returns null. The demo's
+`Assets/Scripts/MenuUI.ery` creates its Canvas, labels, and buttons this way, with
+ordinary reflected `addComponent<T>()` and script methods as click callbacks.
+World transforms use the C++ getter/setter methods.
 `Quaternion.fromEuler` uses radians; `fromEulerDegrees` uses degrees. C++ const
 objects are read-only. Collections convert to script arrays; these containers
 are snapshots, so replace a writable collection field to write it back.
@@ -717,14 +765,15 @@ ScreenSettings screenSettings() const override { return screen_; }
 // screen_ = {1280, 720, true};
 ```
 
-The Windows backend applies changes after `update`. Width and height set both the
-rendering resolution and the windowed client size; a zero dimension keeps the
-current size. Fullscreen is a borderless window covering the current monitor,
-with the selected rendering resolution fitted into it. Returning to windowed mode
-restores the previous position and the selected client size. Manual resizing
-letterboxes the rendered image until you request a different resolution.
-The backend updates `Input::viewport` for correct UI clicks. Settings remain in
-memory for the current run; persistence is up to your game.
+The Windows backend applies requested changes after `update`. Width and height set
+the windowed client size; a zero dimension keeps its current size. Rendering follows
+the actual client size, including manual resizing and maximization, and fullscreen
+renders at the current monitor size. Unchanged requests do not undo manual resizing.
+Returning to windowed mode restores the previous position and selected client size.
+Minimization retains the last valid render target. `Input::renderWidth`, `renderHeight`,
+and `viewport` match the resized rendering for camera projection and UI picking.
+World-space UI can use these dimensions to adjust its camera or layout, as the demo
+menu does. Settings remain in memory for the current run; persistence is up to your game.
 
 Frame pacing uses shared static settings, available to games, the editor, and
 EryScript through `Application`:

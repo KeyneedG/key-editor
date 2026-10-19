@@ -4,6 +4,20 @@ The collectible animation in Assets/Untitled.scene.json runs real EryScript comp
 engine API is discovered through C++26 reflection; the demo also exposes
 std::sin directly through reflection, without a conversion lambda.
 
+## Menu from a file
+
+`Assets/Scripts/MenuUI.ery` is attached to `UICamera` through `EryScript.source`.
+It creates the UI on Awake using `scene.createEntity(name, parent)` and
+`addComponent<Canvas/Image/SimpleText/Button>()`, then assigns script methods to
+`Button.onClick`. The saved scene has no menu objects. `CollectorController` binds its
+live gameplay state as `gameplay` before EryScript Awake, so the script can pause
+movement, apply screen settings, and request quit. The menu adapts its orthographic
+camera using `input.renderWidth` and `input.renderHeight`.
+
+Select an object and double-click a `.ery` file in Assets to attach a file-backed
+EryScript. Files are read when entering play or calling `restart()`; no C++ rebuild is
+needed for source edits. Inline `code` components are still supported.
+
 ## Attach a script
 
 ~~~cpp
@@ -52,7 +66,7 @@ accept either Key or MouseButton constants; reflected constants select the
 correct overload. Input fields are read-only. mouseX/Y, mouseDeltaX/Y,
 mouseWheel, mouseWheelHorizontal and focused are discovered automatically.
 
-The script root exposes entity, input, deltaTime and time. Nested fields are
+The script root exposes entity, scene, input, deltaTime and time. Nested fields are
 live, so entity.transform.localPosition.y = 2 updates the entity directly.
 World transforms use position()/rotation()/lossyScale() and setPosition(...)/
 setRotation(...). Quaternion.fromEuler takes one Vector3 in radians;
